@@ -1,0 +1,63 @@
+export const TICK_RATE = 15; // ticks por segundo (autoridad del servidor)
+export const TICK_MS = 1000 / TICK_RATE;
+export const INTERP_DELAY_MS = 120; // el cliente renderiza este delay por detrás para interpolar
+
+export const MAX_PLAYERS = 8;
+export const CLASSIC_WAVES = 20;
+// Velocidades de simulación que puede elegir el anfitrión (steps por tick de red).
+export const GAME_SPEEDS = [1, 2, 3] as const;
+
+export const START_LIVES = 20;
+export const SELL_REFUND = 0.7;
+export const CALL_WAVE_GOLD_PER_SEC = 2; // oro por segundo restante al llamar la oleada antes
+export const FIRST_INTERLUDE_SEC = 25;
+export const INTERLUDE_SEC = 13;
+
+export const WAVE_BONUS_BASE = 20;
+export const WAVE_BONUS_PER_WAVE = 4;
+
+// ---------- élites ----------
+export const ELITE_MIN_WAVE = 4; // antes de esta oleada no hay élites
+export const ELITE_TWO_AFFIX_WAVE = 10; // desde aquí, los élites llevan 2 afijos
+export const ELITE_HP_MULT = 2.6;
+export const ELITE_BOUNTY_MULT = 3;
+export const ELITE_RADIUS_MULT = 1.3;
+export const ELITE_EXTRA_LIVES = 1; // vidas extra que cuesta si se escapa
+
+// oro de entrada para quien se une con la partida ya empezada
+export const midJoinGold = (wave: number) => 180 + wave * 22;
+
+export const START_GOLD: Record<string, number> = {
+  easy: 300,
+  normal: 220,
+  hard: 180,
+};
+
+export const DIFF_HP_MULT: Record<string, number> = {
+  easy: 0.8,
+  normal: 1.0,
+  hard: 1.3,
+};
+
+export const DIFF_SPEED_MULT: Record<string, number> = {
+  easy: 0.9,
+  normal: 1.0,
+  hard: 1.08,
+};
+
+// escalado de HP por jugador extra (co-op)
+export const HP_PER_EXTRA_PLAYER = 0.4;
+
+export const PLAYER_COLORS = [
+  '#4fc3f7', // celeste
+  '#f06292', // rosa
+  '#aed581', // verde
+  '#ffb74d', // naranja
+  '#ba68c8', // morado
+  '#fff176', // amarillo
+  '#4db6ac', // teal
+  '#e57373', // rojo
+];
+
+export const BALANCE_VERSION = 1;
+export const PROTOCOL_VERSION = 1;

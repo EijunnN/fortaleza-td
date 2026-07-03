@@ -1,0 +1,162 @@
+import type { GameEvent, GameState, MapDef, PlayerCommand } from '../types.js';
+import { TOWERS, towerLevel } from '../balance/towers.js';
+import { CALL_WAVE_GOLD_PER_SEC, SELL_REFUND, TICK_RATE } from '../constants.js';
+import { placementError, type PlacementContext } from './grid.js';
+
+function reject(events: GameEvent[], playerId: string, reason: string) {
+  events.push({ e: 'reject', playerId, reason });
+}
+
+export function applyCommands(
+  state: GameState,
+  map: MapDef,
+  ctx: PlacementContext,
+  commands: PlayerCommand[],
+  events: GameEvent[],
+): void {
+  for (const { playerId, cmd } of commands) {
+    const player = state.players.find((p) => p.id === playerId);
+    if (!player || state.over) continue;
+
+    switch (cmd.kind) {
+      case 'place': {
+        const def = TOWERS[cmd.towerType];
+        if (!def) break;
+        const lvl = def.levels[0];
+        if (player.gold < lvl.cost) {
+          reject(events, playerId, 'No te alcanza el oro');
+          break;
+        }
+        const err = placementError(map, ctx, state.towers, cmd.cx, cmd.cy);
+        if (err) {
+          const msgs: Record<string, string> = {
+            fuera: 'Fuera del mapa',
+            camino: 'No puedes construir sobre el camino',
+            bloqueado: 'Celda bloqueada',
+            ocupado: 'Ya hay una torre ahí',
+          };
+          reject(events, playerId, msgs[err]);
+          break;
+        }
+        player.gold -= lvl.cost;
+        player.stats.goldSpent += lvl.cost;
+        player.stats.towersBuilt += 1;
+        state.towers.push({
+          id: state.nextId++,
+          type: cmd.towerType,
+          cx: cmd.cx,
+          cy: cmd.cy,
+          level: 1,
+          spec: -1,
+          owner: playerId,
+          cooldownLeft: 0,
+          targetMode: 'first',
+          invested: lvl.cost,
+          kills: 0,
+          damage: 0,
+        });
+        events.push({ e: 'place', x: cmd.cx + 0.5, y: cmd.cy + 0.5, towerType: cmd.towerType });
+        break;
+      }
+
+      case 'upgrade': {
+        const tower = state.towers.find((t) => t.id === cmd.towerId);
+        if (!tower) break;
+        if (tower.owner !== playerId) {
+          reject(events, playerId, 'Solo el dueño puede mejorar esta torre');
+          break;
+        }
+        if (tower.level >= 3) {
+          reject(events, playerId, 'Nivel máximo');
+          break;
+        }
+        const cost = towerLevel(tower.type, tower.level + 1).cost;
+        if (player.gold < cost) {
+          reject(events, playerId, 'No te alcanza el oro');
+          break;
+        }
+        player.gold -= cost;
+        player.stats.goldSpent += cost;
+        tower.level += 1;
+        tower.invested += cost;
+        events.push({ e: 'upgrade', x: tower.cx + 0.5, y: tower.cy + 0.5, level: tower.level });
+        break;
+      }
+
+      case 'specialize': {
+        const tower = state.towers.find((t) => t.id === cmd.towerId);
+        if (!tower) break;
+        if (tower.owner !== playerId) {
+          reject(events, playerId, 'Solo el dueño puede especializar esta torre');
+          break;
+        }
+        if (tower.level < 3) {
+          reject(events, playerId, 'Primero llévala al nivel máximo');
+          break;
+        }
+        if (tower.spec >= 0) {
+          reject(events, playerId, 'Ya está especializada');
+          break;
+        }
+        const specs = TOWERS[tower.type].specs;
+        if (cmd.spec !== 0 && cmd.spec !== 1) break;
+        const spec = specs[cmd.spec];
+        if (player.gold < spec.cost) {
+          reject(events, playerId, 'No te alcanza el oro');
+          break;
+        }
+        player.gold -= spec.cost;
+        player.stats.goldSpent += spec.cost;
+        tower.spec = cmd.spec;
+        tower.invested += spec.cost;
+        tower.cooldownLeft = 0;
+        events.push({
+          e: 'specialize',
+          x: tower.cx + 0.5,
+          y: tower.cy + 0.5,
+          towerType: tower.type,
+          spec: cmd.spec,
+          name: spec.name,
+        });
+        break;
+      }
+
+      case 'sell': {
+        const idx = state.towers.findIndex((t) => t.id === cmd.towerId);
+        if (idx === -1) break;
+        const tower = state.towers[idx];
+        if (tower.owner !== playerId) {
+          reject(events, playerId, 'Solo el dueño puede vender esta torre');
+          break;
+        }
+        const refund = Math.floor(tower.invested * SELL_REFUND);
+        player.gold += refund;
+        player.stats.goldEarned += refund;
+        state.towers.splice(idx, 1);
+        events.push({ e: 'sell', x: tower.cx + 0.5, y: tower.cy + 0.5, refund });
+        break;
+      }
+
+      case 'target': {
+        const tower = state.towers.find((t) => t.id === cmd.towerId);
+        if (!tower || tower.owner !== playerId) break;
+        tower.targetMode = cmd.mode;
+        break;
+      }
+
+      case 'call_wave': {
+        if (state.waveState !== 'interlude') break;
+        const secsLeft = state.interludeLeft / TICK_RATE;
+        if (secsLeft < 1.5) break;
+        const bonus = Math.floor(secsLeft * CALL_WAVE_GOLD_PER_SEC);
+        for (const p of state.players) {
+          p.gold += bonus;
+          p.stats.goldEarned += bonus;
+        }
+        state.interludeLeft = 0;
+        events.push({ e: 'sys', msg: `${player.name} llamó la oleada antes (+${bonus} de oro para todos)` });
+        break;
+      }
+    }
+  }
+}

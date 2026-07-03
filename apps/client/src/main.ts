@@ -1,0 +1,354 @@
+import './style.css';
+import { ENEMIES, ENEMY_ORDER, GAME_SPEEDS, TOWERS, type GameEvent } from '@td/shared';
+import { net } from './net.js';
+import { pushFrame, saveName, startGameStore, store } from './store.js';
+import { addPing, addShake, initRenderer, resetRenderer, towerFired } from './renderer.js';
+import { initInput } from './input.js';
+import { buildTowerBar, hidePanel, onTick, toast, addChat, refreshPanel, syncSpeedButton } from './hud.js';
+import { hideEnd, homeError, initHome, initLobby, renderLobby, showEnd, switchScreen } from './screens.js';
+import { beam, burst, clearParticles, floatText, line, ring } from './particles.js';
+import { sfx } from './audio.js';
+
+const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+
+// ---------- procesado de eventos de la simulación ----------
+
+function processEvents(events: GameEvent[]): void {
+  const gs = store.game;
+  if (!gs) return;
+  const myColor = gs.init.players.find((p) => p.id === store.playerId)?.color ?? '#fff';
+
+  for (const ev of events) {
+    switch (ev.e) {
+      case 'shot':
+        line(ev.x, ev.y, ev.tx, ev.ty, ev.color);
+        towerFired(ev.x, ev.y);
+        sfx.snipe();
+        break;
+      case 'chain':
+        beam(ev.pts, ev.color);
+        towerFired(ev.pts[0][0], ev.pts[0][1]);
+        sfx.zap();
+        break;
+      case 'hit':
+        if (ev.kind === 'splash') {
+          ring(ev.x, ev.y, ev.r, '#ffab40');
+          burst(ev.x, ev.y, '#ff7043', 10, 2.6);
+          if (ev.r >= 1.2) addShake(2.5);
+          sfx.boom();
+        } else if (ev.kind === 'poison') {
+          burst(ev.x, ev.y, '#9ccc65', 4, 1.2);
+        } else if (ev.kind === 'frost') {
+          burst(ev.x, ev.y, '#81d4fa', 4, 1.2);
+        } else {
+          burst(ev.x, ev.y, '#ffe082', 3, 1.4);
+          sfx.shot();
+        }
+        break;
+      case 'death': {
+        const def = ENEMIES[ev.type];
+        const big = def.boss || ev.elite;
+        burst(ev.x, ev.y, def.color, def.boss ? 30 : ev.elite ? 18 : 9, big ? 3.5 : 2.2);
+        ring(ev.x, ev.y, def.boss ? 1.6 : ev.elite ? 1.1 : def.radius * 2.2, def.color);
+        if (def.boss) addShake(10);
+        else if (ev.elite) addShake(3);
+        if (ev.bounty > 0) {
+          const killerColor =
+            gs.init.players.find((p) => p.id === ev.killer)?.color ?? '#ffd54f';
+          floatText(ev.x, ev.y - 0.3, `+${ev.bounty}`, killerColor, ev.elite ? 15 : 13);
+        }
+        sfx.death();
+        if (big) sfx.boom();
+        break;
+      }
+      case 'miss':
+        floatText(ev.x, ev.y - 0.2, '¡esquivó!', '#e0e0e0', 11);
+        break;
+      case 'leak':
+        toast(`💔 ¡Se escapó un ${ENEMIES[ev.type].name}! Quedan ${ev.lives} vidas`);
+        addShake(4);
+        sfx.leak();
+        break;
+      case 'wave_start':
+        toast(`⚔️ ¡Oleada ${ev.wave}!`, 'info');
+        sfx.wave();
+        break;
+      case 'wave_end':
+        toast(`✅ Oleada ${ev.wave} superada · +🪙${ev.bonus} para todos`, 'info');
+        sfx.coin();
+        break;
+      case 'income':
+        floatText(ev.x, ev.y - 0.4, `+🪙${ev.amount}`, '#ffd54f', 13);
+        sfx.coin();
+        break;
+      case 'place':
+        burst(ev.x, ev.y, TOWERS[ev.towerType].color, 8, 1.8);
+        sfx.place();
+        break;
+      case 'upgrade':
+        ring(ev.x, ev.y, 0.7, '#ffd54f');
+        sfx.upgrade();
+        break;
+      case 'specialize':
+        ring(ev.x, ev.y, 1.3, '#ffd54f');
+        ring(ev.x, ev.y, 0.9, TOWERS[ev.towerType].color);
+        burst(ev.x, ev.y, '#ffd54f', 18, 2.8);
+        addShake(3);
+        floatText(ev.x, ev.y - 0.6, `★ ${ev.name}`, '#ffd54f', 15);
+        sfx.specialize();
+        break;
+      case 'sell':
+        floatText(ev.x, ev.y, `+🪙${ev.refund}`, '#ffd54f', 13);
+        sfx.sell();
+        break;
+      case 'reject':
+        if (ev.playerId === store.playerId) {
+          toast(ev.reason);
+          sfx.error();
+        }
+        break;
+      case 'boss':
+        toast(`🗿 ¡${ev.name} se acerca!`);
+        addShake(6);
+        sfx.boss();
+        break;
+      case 'gameover':
+        if (ev.victory) sfx.victory();
+        else sfx.defeat();
+        break;
+      case 'sys':
+        addChat('', '#9e9e9e', ev.msg);
+        break;
+    }
+  }
+  void myColor;
+}
+
+// ---------- mensajes del servidor ----------
+
+function wireNet(): void {
+  net.on('room_joined', (msg) => {
+    store.playerId = msg.playerId;
+    store.roomCode = msg.code;
+    store.isHost = msg.isHost;
+    history.replaceState(null, '', `#${msg.code}`);
+    $('overlay-reconnect').hidden = true;
+    if (store.screen === 'home') switchScreen('lobby');
+  });
+
+  net.on('lobby_state', (msg) => {
+    store.lobby = { players: msg.players, settings: msg.settings, inGame: msg.inGame };
+    const me = msg.players.find((p) => p.id === store.playerId);
+    if (me) store.isHost = me.isHost;
+    renderLobby();
+    $('btn-pause').hidden = !store.isHost;
+    $('btn-speed').hidden = !store.isHost;
+    // si migra el anfitrión durante una pausa, el nuevo debe poder reanudar
+    $('btn-resume').hidden = !store.isHost;
+  });
+
+  net.on('game_started', (msg) => {
+    store.playerId = msg.init.youAre;
+
+    // Si ya estamos jugando esta partida, el mensaje es solo la lista de
+    // jugadores actualizada (alguien entró a mitad de partida): NO resetear
+    // velocidad/pausa/cámara/selección de los que ya juegan.
+    const gs = store.game;
+    if (store.screen === 'game' && gs && !gs.over) {
+      gs.init = msg.init;
+      $('overlay-reconnect').hidden = true;
+      $('btn-pause').hidden = !store.isHost;
+      $('btn-speed').hidden = !store.isHost;
+      return;
+    }
+
+    startGameStore(msg.init);
+    store.pingArmed = false;
+    $('btn-ping').classList.remove('armed');
+    clearParticles();
+    resetRenderer();
+    buildTowerBar();
+    hidePanel();
+    hideEnd();
+    $('overlay-pause').hidden = true;
+    $('overlay-reconnect').hidden = true;
+    switchScreen('game');
+    $('btn-pause').hidden = !store.isHost;
+    $('btn-speed').hidden = !store.isHost;
+    syncSpeedButton();
+  });
+
+  net.on('tick', (msg) => {
+    const gs = store.game;
+    if (!gs) return;
+    pushFrame(gs, msg.t, msg.snap);
+    onTick(msg.snap);
+    processEvents(msg.events);
+  });
+
+  net.on('game_over', (msg) => {
+    if (store.game) store.game.over = msg.stats;
+    showEnd(msg.stats);
+  });
+
+  net.on('chat', (msg) => addChat(msg.from, msg.color, msg.text));
+
+  net.on('paused', (msg) => {
+    if (store.game) store.game.paused = true;
+    $('pause-by').textContent = msg.by ? `${msg.by} pausó la partida` : 'La partida está en pausa';
+    $('btn-resume').hidden = !store.isHost;
+    $('overlay-pause').hidden = false;
+    $('btn-pause').textContent = '▶';
+  });
+
+  net.on('resumed', () => {
+    if (store.game) store.game.paused = false;
+    $('overlay-pause').hidden = true;
+    $('btn-pause').textContent = '⏸';
+  });
+
+  net.on('speed', (msg) => {
+    if (store.game) store.game.speed = msg.speed;
+    syncSpeedButton();
+    if (msg.by) toast(`${msg.speed === 1 ? '▶' : '⏩'} Velocidad x${msg.speed} (${msg.by})`, 'info');
+  });
+
+  net.on('map_ping', (msg) => {
+    addPing(msg.x, msg.y, msg.color, msg.by);
+    sfx.ping();
+  });
+
+  net.on('error', (msg) => {
+    const wasReconnecting = !$('overlay-reconnect').hidden;
+    $('overlay-reconnect').hidden = true;
+    if (store.screen === 'home') homeError(msg.msg);
+    else toast(msg.msg);
+    if (msg.msg.startsWith('No existe la sala') || wasReconnecting) {
+      // la sala murió (p. ej. se reinició el servidor): volver al inicio limpio
+      store.roomCode = '';
+      store.game = null;
+      history.replaceState(null, '', location.pathname);
+      switchScreen('home');
+    }
+  });
+
+  net.onOpen = () => {
+    // enlace directo: http://.../?n=Nombre#SALA entra sin pasar por el formulario
+    const qName = new URLSearchParams(location.search).get('n');
+    if (qName && !store.name) saveName(qName.slice(0, 16));
+
+    // reconexión automática a la sala si estábamos en una
+    if (store.roomCode && store.name) {
+      net.send({ type: 'join_room', name: store.name, token: store.token, code: store.roomCode });
+    } else {
+      $('overlay-reconnect').hidden = true;
+      // auto-unirse si la URL trae un código y ya tenemos nombre
+      const hashCode = location.hash.replace('#', '').trim().toUpperCase();
+      if (hashCode.length === 4 && store.name && store.screen === 'home') {
+        net.send({ type: 'join_room', name: store.name, token: store.token, code: hashCode });
+      }
+    }
+  };
+
+  net.onDrop = () => {
+    if (store.roomCode) $('overlay-reconnect').hidden = false;
+  };
+}
+
+// ---------- botones del HUD ----------
+
+function wireHudButtons(): void {
+  $('btn-callwave').addEventListener('click', () => {
+    net.send({ type: 'cmd', cmd: { kind: 'call_wave' } });
+  });
+
+  $('btn-pause').addEventListener('click', () => {
+    if (store.game?.paused) net.send({ type: 'resume' });
+    else net.send({ type: 'pause' });
+  });
+  $('btn-resume').addEventListener('click', () => net.send({ type: 'resume' }));
+
+  // velocidad de juego: el anfitrión cicla x1 → x2 → x3
+  $('btn-speed').addEventListener('click', () => {
+    const current = store.game?.speed ?? 1;
+    const idx = GAME_SPEEDS.indexOf(current as (typeof GAME_SPEEDS)[number]);
+    const next = GAME_SPEEDS[(idx + 1) % GAME_SPEEDS.length];
+    net.send({ type: 'set_speed', speed: next });
+  });
+
+  // ping: arma el siguiente toque en el mapa como marcador (o mantener pulsado)
+  $('btn-ping').addEventListener('click', () => {
+    store.pingArmed = !store.pingArmed;
+    $('btn-ping').classList.toggle('armed', store.pingArmed);
+  });
+
+  const muteBtn = $('btn-mute');
+  const syncMute = () => (muteBtn.textContent = store.muted ? '🔇' : '🔊');
+  syncMute();
+  muteBtn.addEventListener('click', () => {
+    store.muted = !store.muted;
+    localStorage.setItem('td_muted', store.muted ? '1' : '0');
+    syncMute();
+  });
+
+  $('btn-back-lobby').addEventListener('click', () => {
+    hideEnd();
+    store.game = null;
+    switchScreen('lobby');
+    renderLobby();
+  });
+
+  // chat dentro del juego; en móvil la clase .open muestra también el log
+  const chatForm = $('game-chat-form');
+  const chatInput = $<HTMLInputElement>('game-chat-input');
+  const syncChatOpen = () => $('hud-chat').classList.toggle('open', !chatForm.hidden);
+  $('btn-chat-toggle').addEventListener('click', () => {
+    chatForm.hidden = !chatForm.hidden;
+    syncChatOpen();
+    if (!chatForm.hidden) chatInput.focus();
+  });
+  chatForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const text = chatInput.value.trim();
+    if (text) net.send({ type: 'chat', text });
+    chatInput.value = '';
+    chatInput.blur();
+    chatForm.hidden = true;
+    syncChatOpen();
+  });
+  window.addEventListener('keydown', (e) => {
+    if (store.screen !== 'game') return;
+    const active = document.activeElement;
+    if (e.key === 'Enter' && !(active instanceof HTMLInputElement)) {
+      chatForm.hidden = false;
+      syncChatOpen();
+      chatInput.focus();
+      e.preventDefault();
+    }
+    if (e.key === 'Escape' && active === chatInput) {
+      chatInput.blur();
+      chatForm.hidden = true;
+      syncChatOpen();
+    }
+  });
+
+  // ping periódico para mantener viva la conexión (proxies, móviles)
+  setInterval(() => net.send({ type: 'ping', t: Date.now() }), 5000);
+
+  // la selección de torre se refresca al abrir el panel
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) refreshPanel();
+  });
+}
+
+// ---------- arranque ----------
+
+const canvas = $('game-canvas') as HTMLCanvasElement;
+initRenderer(canvas);
+initInput(canvas);
+initHome();
+initLobby();
+wireHudButtons();
+wireNet();
+net.connect();
+switchScreen('home');

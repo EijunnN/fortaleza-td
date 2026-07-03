@@ -1,0 +1,205 @@
+import type {
+  Command,
+  Difficulty,
+  GameEvent,
+  GameMode,
+  GameState,
+  TargetMode,
+  WaveComp,
+} from './types.js';
+import { ENEMIES, ENEMY_ORDER } from './balance/enemies.js';
+import { affixMask } from './balance/affixes.js';
+import { TOWER_ORDER } from './balance/towers.js';
+import { TICK_RATE } from './constants.js';
+
+// ---------- Lobby / sala ----------
+
+export interface RoomSettings {
+  mapId: string;
+  mode: GameMode;
+  difficulty: Difficulty;
+}
+
+export interface LobbyPlayer {
+  id: string;
+  name: string;
+  color: string;
+  isHost: boolean;
+  connected: boolean;
+}
+
+// ---------- Snapshot compacto (arrays para ahorrar bytes) ----------
+
+// enemigo: [id, typeIdx, x, y, hpFrac, flags, affixMask]
+//   flags: 1=slow 2=poison 4=boss 8=elite   affixMask: bits de balance/affixes
+export type SnapEnemy = [number, number, number, number, number, number, number];
+// torre: [id, typeIdx, cx, cy, level, ownerIdx, targetModeIdx, kills, damage, spec]
+//   spec: -1 sin especializar, 0/1 rama elegida
+export type SnapTower = [number, number, number, number, number, number, number, number, number, number];
+// proyectil: [id, kindIdx(0 bullet,1 shell,2 bomb), x, y, colorIdx(=typeIdx de torre)]
+export type SnapProj = [number, number, number, number, number];
+
+export interface SnapPlayer {
+  id: string;
+  gold: number;
+  connected: boolean;
+  kills: number;
+  damage: number;
+  goldEarned: number;
+}
+
+export interface Snap {
+  lives: number;
+  wave: number;
+  totalWaves: number;
+  active: boolean; // false = interludio
+  interludeSec: number;
+  nextWave: [number, number][]; // [enemyTypeIdx, count]
+  players: SnapPlayer[];
+  enemies: SnapEnemy[];
+  towers: SnapTower[];
+  projs: SnapProj[];
+  over: 0 | 1 | 2; // 0 nada, 1 derrota, 2 victoria
+}
+
+export const TARGET_MODES: TargetMode[] = ['first', 'last', 'strong', 'weak', 'near'];
+const PROJ_KINDS = ['bullet', 'shell', 'bomb'] as const;
+
+const r2 = (n: number) => Math.round(n * 100) / 100;
+
+export function buildSnap(state: GameState): Snap {
+  const playerIdx = new Map(state.players.map((p, i) => [p.id, i]));
+  const towerTypeIdx = new Map(TOWER_ORDER.map((t, i) => [t, i]));
+  const enemyTypeIdx = new Map(ENEMY_ORDER.map((t, i) => [t, i]));
+  const towerById = new Map(state.towers.map((t) => [t.id, t]));
+
+  return {
+    lives: state.lives,
+    wave: state.wave,
+    totalWaves: state.totalWaves,
+    active: state.waveState === 'active',
+    interludeSec: Math.max(0, Math.ceil(state.interludeLeft / TICK_RATE)),
+    nextWave: state.nextWaveComp.map((c: WaveComp) => [enemyTypeIdx.get(c.type) ?? 0, c.count]),
+    players: state.players.map((p) => ({
+      id: p.id,
+      gold: Math.floor(p.gold),
+      connected: p.connected,
+      kills: p.stats.kills,
+      damage: Math.round(p.stats.damage),
+      goldEarned: Math.round(p.stats.goldEarned),
+    })),
+    enemies: state.enemies.map((e) => {
+      let flags = 0;
+      if (e.slowFactor < 1) flags |= 1;
+      if (e.poisonUntil > state.tick) flags |= 2;
+      if (ENEMIES[e.type].boss) flags |= 4;
+      if (e.elite) flags |= 8;
+      return [
+        e.id,
+        enemyTypeIdx.get(e.type) ?? 0,
+        r2(e.x),
+        r2(e.y),
+        Math.max(0, Math.round((e.hp / e.maxHp) * 1000) / 1000),
+        flags,
+        e.elite ? affixMask(e.affixes) : 0,
+      ] as SnapEnemy;
+    }),
+    towers: state.towers.map(
+      (t) =>
+        [
+          t.id,
+          towerTypeIdx.get(t.type) ?? 0,
+          t.cx,
+          t.cy,
+          t.level,
+          playerIdx.get(t.owner) ?? 0,
+          TARGET_MODES.indexOf(t.targetMode),
+          t.kills,
+          Math.round(t.damage),
+          t.spec,
+        ] as SnapTower,
+    ),
+    projs: state.projectiles.map((p) => {
+      const tower = towerById.get(p.towerId);
+      return [
+        p.id,
+        PROJ_KINDS.indexOf(p.kind),
+        r2(p.x),
+        r2(p.y),
+        tower ? (towerTypeIdx.get(tower.type) ?? 0) : 0,
+      ] as SnapProj;
+    }),
+    over: state.over === null ? 0 : state.over.victory ? 2 : 1,
+  };
+}
+
+// ---------- Estadísticas de fin de partida ----------
+
+export interface EndStatsPlayer {
+  id: string;
+  name: string;
+  color: string;
+  kills: number;
+  damage: number;
+  goldEarned: number;
+  goldSpent: number;
+  towersBuilt: number;
+}
+
+export interface EndStats {
+  victory: boolean;
+  wave: number;
+  totalWaves: number;
+  mapId: string;
+  mode: GameMode;
+  difficulty: Difficulty;
+  players: EndStatsPlayer[];
+}
+
+export interface HighscoreEntry {
+  names: string[];
+  wave: number;
+  mapId: string;
+  difficulty: Difficulty;
+  date: string;
+}
+
+// ---------- Mensajes cliente -> servidor ----------
+
+export type ClientMsg =
+  | { type: 'create_room'; name: string; token: string; settings: RoomSettings }
+  | { type: 'join_room'; name: string; token: string; code: string }
+  | { type: 'leave_room' }
+  | { type: 'set_settings'; settings: RoomSettings }
+  | { type: 'start_game' }
+  | { type: 'chat'; text: string }
+  | { type: 'cmd'; cmd: Command }
+  | { type: 'pause' }
+  | { type: 'resume' }
+  | { type: 'set_speed'; speed: number }
+  | { type: 'map_ping'; x: number; y: number } // ping cooperativo en el mapa
+  | { type: 'ping'; t: number };
+
+// ---------- Mensajes servidor -> cliente ----------
+
+export interface GameInit {
+  mapId: string;
+  mode: GameMode;
+  difficulty: Difficulty;
+  players: { id: string; name: string; color: string }[];
+  youAre: string;
+}
+
+export type ServerMsg =
+  | { type: 'error'; msg: string }
+  | { type: 'room_joined'; code: string; playerId: string; isHost: boolean }
+  | { type: 'lobby_state'; players: LobbyPlayer[]; settings: RoomSettings; inGame: boolean }
+  | { type: 'game_started'; init: GameInit }
+  | { type: 'tick'; t: number; snap: Snap; events: GameEvent[] }
+  | { type: 'game_over'; stats: EndStats }
+  | { type: 'chat'; from: string; color: string; text: string }
+  | { type: 'paused'; by: string }
+  | { type: 'resumed' }
+  | { type: 'speed'; speed: number; by: string }
+  | { type: 'map_ping'; x: number; y: number; by: string; color: string }
+  | { type: 'pong'; t: number };

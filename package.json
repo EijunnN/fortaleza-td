@@ -1,0 +1,30 @@
+{
+  "name": "fortaleza-td",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Fortaleza — Tower defense cooperativo en tiempo real",
+  "scripts": {
+    "dev": "concurrently -n server,client -c blue,green \"pnpm --filter @td/server dev\" \"pnpm --filter @td/client dev\"",
+    "build": "pnpm --filter @td/client build && pnpm --filter @td/server build",
+    "start": "node apps/server/dist/server.js",
+    "check": "tsc -b packages/shared apps/server apps/client",
+    "simtest": "tsx tools/simtest.ts",
+    "wstest": "tsx tools/wstest.ts"
+  },
+  "devDependencies": {
+    "@td/shared": "workspace:*",
+    "@types/ws": "^8.5.13",
+    "concurrently": "^9.1.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "ws": "^8.18.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ],
+    "allowBuilds": {
+      "esbuild": true
+    }
+  }
+}
