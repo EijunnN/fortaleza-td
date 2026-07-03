@@ -59,5 +59,5 @@ export const PLAYER_COLORS = [
   '#e57373', // rojo
 ];
 
-export const BALANCE_VERSION = 1;
+export const BALANCE_VERSION = 2;
 export const PROTOCOL_VERSION = 1;

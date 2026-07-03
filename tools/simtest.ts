@@ -49,7 +49,7 @@ function buildCellCandidates(mapId: string): [number, number][] {
   return out;
 }
 
-const BUILD_ORDER: TowerTypeId[] = ['archer', 'cannon', 'frost', 'archer', 'tesla', 'poison', 'sniper', 'mortar'];
+const BUILD_ORDER: TowerTypeId[] = ['archer', 'cannon', 'frost', 'archer', 'tesla', 'banner', 'poison', 'sniper', 'mortar'];
 
 function botCommands(state: GameState, candidates: [number, number][], counters: Map<string, number>): PlayerCommand[] {
   const cmds: PlayerCommand[] = [];
@@ -302,6 +302,55 @@ console.log('— Regresión: las crías de spawnOnDeath sobreviven a un golpe de
   }
   assert(slimeDied, 'el cañón mató al baboso con daño de área');
   assert(maxSlimelets >= 2, `los babosines sobreviven a su golpe de nacimiento (máx vivos: ${maxSlimelets})`);
+}
+
+console.log('— Estandarte: refuerza el daño de las torres cercanas (sin apilar) —');
+{
+  const map = getMap('sendero');
+  const simCtx = makeSimContext(map, makePlacementContext(map));
+
+  // Mide el daño del primer proyectil que dispara un arquero, con `banners`
+  // estandartes de nivel 1 colocados adyacentes (todos dentro del radio 2.2).
+  function archerShotDamage(banners: number): number {
+    const st = createGame('sendero', 'endless', 'normal', 777, [{ id: 'p1', name: 'A', color: '#fff' }]);
+    st.nextId = 9000;
+    st.wave = 1;
+    st.waveState = 'active';
+    st.spawnQueue = [];
+    st.pendingWave = [];
+
+    // enemigo pegado al arquero y dentro de alcance (wpIdx válido para no fugarse)
+    const enemy: EnemyState = {
+      id: 1000, type: 'brute', x: 5.5, y: 2.5, hp: 100000, maxHp: 100000,
+      pathIdx: 0, wpIdx: 1, travelled: 0, slowFactor: 1, slowUntil: 0, poisonDps: 0, poisonUntil: 0,
+      poisonSrc: 0, bountyMult: 1, elite: false, affixes: [], speedMult: 1, armorBonus: 0, regenBonus: 0,
+      dodgeBonus: 0, slowResist: 0, radiusMult: 1, auraRadius: 0, auraHps: 0, deathSpawn: 0,
+    };
+    st.enemies.push(enemy);
+    const archer: TowerState = {
+      id: 2000, type: 'archer', cx: 5, cy: 1, level: 1, spec: -1, owner: 'p1',
+      cooldownLeft: 0, targetMode: 'first', invested: 50, kills: 0, damage: 0,
+    };
+    st.towers.push(archer);
+    for (let i = 0; i < banners; i++) {
+      st.towers.push({
+        id: 3000 + i, type: 'banner', cx: 6 + i, cy: 1, level: 1, spec: -1, owner: 'p1',
+        cooldownLeft: 0, targetMode: 'first', invested: 90, kills: 0, damage: 0,
+      });
+    }
+    // un tick: el arquero está listo y dispara; leemos el proyectil emitido
+    stepGame(st, simCtx, []);
+    const proj = st.projectiles.find((p) => p.towerId === 2000);
+    return proj ? proj.damage : 0;
+  }
+
+  const base = archerShotDamage(0);
+  const withBanner = archerShotDamage(1);
+  const withTwo = archerShotDamage(2);
+  // base 8, aura +15% → round(8*1.15)=9
+  assert(base > 0, `el arquero dispara daño base (${base})`);
+  assert(withBanner > base, `el estandarte sube el daño del arquero (${base} → ${withBanner})`);
+  assert(withTwo === withBanner, `dos estandartes no apilan: mismo multiplicador que uno (${withBanner} == ${withTwo})`);
 }
 
 console.log('— Determinismo: misma semilla + mismos comandos → mismo estado —');

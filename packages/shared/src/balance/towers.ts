@@ -10,6 +10,7 @@ export const TOWER_ORDER: TowerTypeId[] = [
   'sniper',
   'mortar',
   'bank',
+  'banner',
 ];
 
 export const TOWERS: Record<TowerTypeId, TowerDef> = {
@@ -327,6 +328,44 @@ export const TOWERS: Record<TowerTypeId, TowerDef> = {
         cooldown: 0,
         incomePerWave: 55,
         incomeToAll: true,
+      },
+    ],
+  },
+  banner: {
+    id: 'banner',
+    name: 'Estandarte',
+    desc: 'No ataca: refuerza a las torres cercanas de todo el equipo.',
+    color: '#ffca28',
+    hotkey: '9',
+    targetsAir: false,
+    targetsGround: false,
+    projectileKind: 'none',
+    levels: [
+      { cost: 90, damage: 0, range: 2.2, cooldown: 0, auraDamage: 0.15 },
+      { cost: 140, damage: 0, range: 2.6, cooldown: 0, auraDamage: 0.25 },
+      { cost: 220, damage: 0, range: 3.0, cooldown: 0, auraDamage: 0.35 },
+    ],
+    specs: [
+      {
+        key: 'warbanner',
+        name: 'Estandarte de Guerra',
+        desc: 'Aura de daño brutal: las torres cercanas pegan mucho más fuerte.',
+        cost: 360,
+        damage: 0,
+        range: 3.0,
+        cooldown: 0,
+        auraDamage: 0.6,
+      },
+      {
+        key: 'hastebanner',
+        name: 'Estandarte de Celeridad',
+        desc: 'Aura de cadencia: las torres cercanas disparan mucho más rápido.',
+        cost: 360,
+        damage: 0,
+        range: 3.0,
+        cooldown: 0,
+        auraHaste: 0.4,
+        auraDamage: 0,
       },
     ],
   },

@@ -15,7 +15,7 @@ import {
 } from '@td/shared';
 import { net } from './net.js';
 import { myGold, store } from './store.js';
-import { ENEMY_ICONS, TOWER_ICONS } from './renderer.js';
+import { countBannerTargets, ENEMY_ICONS, TOWER_ICONS } from './renderer.js';
 import { setPlacing } from './input.js';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -82,8 +82,11 @@ function syncPlacingInfo(): void {
   const def = TOWERS[type];
   const lvl = def.levels[0];
   const parts: string[] = [`${TOWER_ICONS[type]} <b>${def.name}</b> 🪙${lvl.cost}`];
+  const isBanner = lvl.auraDamage !== undefined || lvl.auraHaste !== undefined;
   if (lvl.damage > 0) parts.push(`Daño <b>${lvl.damage}</b>`);
-  if (lvl.range > 0) parts.push(`Alcance <b>${lvl.range}</b>`);
+  if (lvl.auraDamage !== undefined && lvl.auraDamage > 0) parts.push(`Aura de daño <b>+${Math.round(lvl.auraDamage * 100)}%</b>`);
+  if (lvl.auraHaste !== undefined && lvl.auraHaste > 0) parts.push(`Aura de cadencia <b>+${Math.round(lvl.auraHaste * 100)}%</b>`);
+  if (lvl.range > 0) parts.push(`${isBanner ? 'Radio' : 'Alcance'} <b>${lvl.range}</b>`);
   if (lvl.cooldown > 0) parts.push(`Cadencia <b>${lvl.cooldown}s</b>`);
   parts.push(...specialStats(lvl));
   const hint = window.matchMedia('(hover: hover)').matches
@@ -165,7 +168,19 @@ function statBlock(lvl: TowerLevelDef, next: TowerLevelDef | null): string[] {
     }
   }
   if (lvl.shots && lvl.shots > 1) lines.push(`Dispara a <b>${lvl.shots}</b> a la vez`);
-  if (lvl.range > 0) lines.push(stat('Alcance', lvl.range, next?.range));
+  if (lvl.auraDamage !== undefined && lvl.auraDamage > 0) {
+    const nxt = next?.auraDamage !== undefined && next.auraDamage > 0 ? `${Math.round(next.auraDamage * 100)}%` : null;
+    lines.push(stat('Aura de daño', `+${Math.round(lvl.auraDamage * 100)}%`, nxt));
+  }
+  if (lvl.auraHaste !== undefined && lvl.auraHaste > 0) {
+    const nxt = next?.auraHaste !== undefined && next.auraHaste > 0 ? `${Math.round(next.auraHaste * 100)}%` : null;
+    lines.push(stat('Aura de cadencia', `+${Math.round(lvl.auraHaste * 100)}%`, nxt));
+  }
+  if ((lvl.auraDamage !== undefined || lvl.auraHaste !== undefined) && lvl.range > 0) {
+    lines.push(stat('Radio', lvl.range, next?.range));
+  } else if (lvl.range > 0) {
+    lines.push(stat('Alcance', lvl.range, next?.range));
+  }
   if (lvl.cooldown > 0) lines.push(stat('Cadencia', lvl.cooldown, next?.cooldown, 's'));
   if (lvl.splash) lines.push(stat('Área', lvl.splash, next?.splash));
   if (lvl.slow) lines.push(stat('Congela al', `${Math.round(lvl.slow.factor * 100)}%`, next?.slow ? `${Math.round(next.slow.factor * 100)}%` : null));
@@ -206,7 +221,13 @@ export function refreshPanel(): void {
   const canSpecialize = level >= 3 && !specialized;
 
   const statLines = statBlock(lvl, next);
-  statLines.push(`Bajas: <b>${kills}</b> · Daño total: <b>${damage.toLocaleString()}</b>`);
+  // Estandarte: cuántas torres está reforzando ahora mismo (contado en el cliente)
+  if (lvl.auraDamage !== undefined || lvl.auraHaste !== undefined) {
+    const n = countBannerTargets(gs.latest, id);
+    statLines.push(`Reforzando <b>${n}</b> ${n === 1 ? 'torre' : 'torres'}`);
+  } else {
+    statLines.push(`Bajas: <b>${kills}</b> · Daño total: <b>${damage.toLocaleString()}</b>`);
+  }
   statLines.push(`Dueño: <b style="color:${owner?.color}">${escapeHtml(owner?.name ?? '?')}</b>`);
 
   // cabecera: nombre (+ especialización) y nivel/estrella

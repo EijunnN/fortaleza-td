@@ -10,7 +10,8 @@ export type TowerTypeId =
   | 'tesla'
   | 'sniper'
   | 'mortar'
-  | 'bank';
+  | 'bank'
+  | 'banner';
 
 export type EnemyTypeId =
   | 'goblin'
@@ -62,6 +63,10 @@ export interface TowerLevelDef {
   incomeToAll?: boolean; // el ingreso va a TODOS los jugadores
   slowAura?: { factor: number; radius: number }; // ralentiza pasivamente a su alrededor (no dispara)
   targetsAirOverride?: boolean; // sobrescribe si la torre alcanza aire
+  // auras de soporte del Estandarte (no dispara): fracciones, p. ej. 0.25 = +25%.
+  // El radio del aura es el propio `range`. Se toma el MEJOR de cada tipo, no se apilan.
+  auraDamage?: number; // +daño a las torres cercanas (fracción)
+  auraHaste?: number; // +cadencia a las torres cercanas (fracción; divide el cooldown)
 }
 
 // Especialización: se elige una de dos al llegar al nivel máximo. Es un bloque

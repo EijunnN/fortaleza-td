@@ -249,27 +249,77 @@ function pickTarget(
   return best;
 }
 
+// Refuerzo que un Estandarte aplica a las torres bajo su aura (fracciones).
+export interface AuraBuff {
+  dmgMult: number;
+  hasteMult: number;
+}
+
+// ¿Es esta torre un Estandarte (torre de aura, no dispara)?
+function isBanner(lvl: { auraDamage?: number; auraHaste?: number }): boolean {
+  return lvl.auraDamage !== undefined || lvl.auraHaste !== undefined;
+}
+
+// Calcula, por cada torre buffeada, el MEJOR aura de daño y de cadencia de todos
+// los Estandartes que la cubren (de CUALQUIER dueño, co-op). No se apila: se toma
+// el máximo de cada tipo, no la suma. Solo lee `state`; es determinista (orden
+// estable de `state.towers`, sin RNG).
+export function computeAuras(state: GameState): Map<number, AuraBuff> {
+  const buffs = new Map<number, AuraBuff>();
+  for (const banner of state.towers) {
+    const blvl = activeStats(banner.type, banner.level, banner.spec);
+    if (!isBanner(blvl)) continue;
+    const dmg = blvl.auraDamage ?? 0;
+    const haste = blvl.auraHaste ?? 0;
+    if (dmg <= 0 && haste <= 0) continue;
+    const bx = banner.cx + 0.5;
+    const by = banner.cy + 0.5;
+    for (const target of state.towers) {
+      if (target.id === banner.id) continue;
+      const tlvl = activeStats(target.type, target.level, target.spec);
+      if (isBanner(tlvl)) continue; // un estandarte no buffea a otro estandarte
+      if (tlvl.incomePerWave) continue; // ni a la mina
+      if (dist(bx, by, target.cx + 0.5, target.cy + 0.5) > blvl.range) continue;
+      let buff = buffs.get(target.id);
+      if (!buff) {
+        buff = { dmgMult: 0, hasteMult: 0 };
+        buffs.set(target.id, buff);
+      }
+      if (dmg > buff.dmgMult) buff.dmgMult = dmg;
+      if (haste > buff.hasteMult) buff.hasteMult = haste;
+    }
+  }
+  return buffs;
+}
+
 function fireTower(
   state: GameState,
   ctx: SimContext,
   tower: TowerState,
   events: GameEvent[],
+  auras: Map<number, AuraBuff>,
 ): void {
   const towerDef = TOWERS[tower.type];
   const lvl = activeStats(tower.type, tower.level, tower.spec);
-  if (lvl.incomePerWave || lvl.slowAura) return; // la mina y la permafrost no disparan
+  if (lvl.incomePerWave || lvl.slowAura || isBanner(lvl)) return; // la mina, la permafrost y el estandarte no disparan
 
   const canAir = towerTargetsAir(tower.type, tower.spec);
   const canGround = towerDef.targetsGround;
   const execute = lvl.execute ?? 0;
   const shots = Math.max(1, lvl.shots ?? 1);
 
+  // refuerzo del/los Estandarte(s) que cubren esta torre (mejor de cada tipo)
+  const buff = auras.get(tower.id);
+  const dmgMult = buff ? buff.dmgMult : 0;
+  const hasteMult = buff ? buff.hasteMult : 0;
+  const dmgFor = (base: number) => Math.round(base * (1 + dmgMult));
+
   const target = pickTarget(state, ctx, tower, lvl, canAir, canGround);
   if (!target) return;
 
   const tx = tower.cx + 0.5;
   const ty = tower.cy + 0.5;
-  tower.cooldownLeft = Math.round(lvl.cooldown * TICK_RATE);
+  tower.cooldownLeft = Math.round((lvl.cooldown * TICK_RATE) / (1 + hasteMult));
 
   if (towerDef.projectileKind === 'beam') {
     // Tesla: cadena instantánea (el multidisparo no aplica; se cubre con más saltos)
@@ -278,7 +328,7 @@ function fireTower(
     const hitIds = new Set<number>();
     const pts: [number, number][] = [[tx, ty]];
     let current: EnemyState | null = target;
-    let dmg = lvl.damage;
+    let dmg = dmgFor(lvl.damage);
     for (let i = 0; i < chain.targets && current; i++) {
       hitIds.add(current.id);
       pts.push([current.x, current.y]);
@@ -320,7 +370,7 @@ function fireTower(
     // Francotirador: impacto instantáneo, ignora esquiva
     for (const t of targets) {
       events.push({ e: 'shot', x: tx, y: ty, tx: t.x, ty: t.y, kind: 'snipe', color: towerDef.color });
-      damageEnemy(state, ctx, t, lvl.damage, lvl.pierceArmor ?? false, tower.id, events, execute);
+      damageEnemy(state, ctx, t, dmgFor(lvl.damage), lvl.pierceArmor ?? false, tower.id, events, execute);
     }
     return;
   }
@@ -338,7 +388,7 @@ function fireTower(
       speed: (lvl.projectileSpeed ?? 12) / TICK_RATE,
       towerId: tower.id,
       owner: tower.owner,
-      damage: lvl.damage,
+      damage: dmgFor(lvl.damage),
       splash: lvl.splash ?? 0,
       slow: lvl.slow
         ? { factor: lvl.slow.factor, durationTicks: Math.round(lvl.slow.duration * TICK_RATE) }
@@ -617,13 +667,13 @@ function stepWaves(state: GameState, ctx: SimContext, events: GameEvent[]): void
   }
 }
 
-function stepTowers(state: GameState, ctx: SimContext, events: GameEvent[]): void {
+function stepTowers(state: GameState, ctx: SimContext, events: GameEvent[], auras: Map<number, AuraBuff>): void {
   for (const tower of state.towers) {
     if (tower.cooldownLeft > 0) {
       tower.cooldownLeft -= 1;
       continue;
     }
-    fireTower(state, ctx, tower, events);
+    fireTower(state, ctx, tower, events, auras);
   }
 }
 
@@ -663,7 +713,10 @@ export function stepGame(
   stepWaves(state, ctx, events);
   stepTowerAuras(state);
   stepEnemies(state, ctx, events);
-  stepTowers(state, ctx, events);
+  // refuerzo de los Estandartes: se calcula una vez por tick (solo lee el estado)
+  // y se pasa a las torres para que multipliquen daño/cadencia al disparar.
+  const auras = computeAuras(state);
+  stepTowers(state, ctx, events, auras);
   stepProjectiles(state, ctx, events);
   state.enemies = state.enemies.filter((e) => e.hp > 0);
   state.tick += 1;

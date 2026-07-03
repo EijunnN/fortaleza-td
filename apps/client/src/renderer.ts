@@ -13,6 +13,7 @@ import {
   type EnemyTypeId,
   type MapDef,
   type PlacementContext,
+  type Snap,
   type SnapEnemy,
   type TowerTypeId,
 } from '@td/shared';
@@ -30,6 +31,7 @@ export const TOWER_ICONS: Record<TowerTypeId, string> = {
   sniper: '🎯',
   mortar: '🧨',
   bank: '💰',
+  banner: '🚩',
 };
 
 export const ENEMY_ICONS: Record<EnemyTypeId, string> = {
@@ -1036,9 +1038,67 @@ function nearestEnemyAngle(interp: InterpResult | null, cx: number, cy: number, 
   return best;
 }
 
+// Refuerzo de un Estandarte sobre una torre, calculado en el CLIENTE a partir del
+// snapshot (posiciones + activeStats) — NO cambia el protocolo. Espeja la lógica
+// de `computeAuras` de la sim: mejor de cada tipo, sin apilar; cubre a torres de
+// cualquier dueño; no buffea a estandartes ni a la mina.
+export interface ClientAura {
+  dmg: number;
+  haste: number;
+}
+
+export function computeBannerAuras(snap: Snap): Map<number, ClientAura> {
+  const out = new Map<number, ClientAura>();
+  for (const banner of snap.towers) {
+    const blvl = activeStats(TOWER_ORDER[banner[1]], banner[4], banner[9] ?? -1);
+    const dmg = blvl.auraDamage ?? 0;
+    const haste = blvl.auraHaste ?? 0;
+    if (dmg <= 0 && haste <= 0) continue; // no es estandarte (o aura nula)
+    const bx = banner[2] + 0.5;
+    const by = banner[3] + 0.5;
+    for (const tw of snap.towers) {
+      if (tw[0] === banner[0]) continue;
+      const tlvl = activeStats(TOWER_ORDER[tw[1]], tw[4], tw[9] ?? -1);
+      if (tlvl.auraDamage !== undefined || tlvl.auraHaste !== undefined) continue; // otro estandarte
+      if (tlvl.incomePerWave) continue; // la mina
+      if (Math.hypot(bx - (tw[2] + 0.5), by - (tw[3] + 0.5)) > blvl.range) continue;
+      let a = out.get(tw[0]);
+      if (!a) {
+        a = { dmg: 0, haste: 0 };
+        out.set(tw[0], a);
+      }
+      if (dmg > a.dmg) a.dmg = dmg;
+      if (haste > a.haste) a.haste = haste;
+    }
+  }
+  return out;
+}
+
+// Cuenta cuántas torres (no estandartes, no minas) hay dentro del aura de un
+// Estandarte concreto. Usado por el panel del HUD ("Reforzando N torres").
+export function countBannerTargets(snap: Snap, bannerId: number): number {
+  const banner = snap.towers.find((t) => t[0] === bannerId);
+  if (!banner) return 0;
+  const blvl = activeStats(TOWER_ORDER[banner[1]], banner[4], banner[9] ?? -1);
+  if (blvl.auraDamage === undefined && blvl.auraHaste === undefined) return 0;
+  const bx = banner[2] + 0.5;
+  const by = banner[3] + 0.5;
+  let n = 0;
+  for (const tw of snap.towers) {
+    if (tw[0] === bannerId) continue;
+    const tlvl = activeStats(TOWER_ORDER[tw[1]], tw[4], tw[9] ?? -1);
+    if (tlvl.auraDamage !== undefined || tlvl.auraHaste !== undefined) continue;
+    if (tlvl.incomePerWave) continue;
+    if (Math.hypot(bx - (tw[2] + 0.5), by - (tw[3] + 0.5)) > blvl.range) continue;
+    n++;
+  }
+  return n;
+}
+
 function drawTowers(gs: GameStore, interp: InterpResult | null, now: number, dt: number): void {
   const snap = gs.latest;
   if (!snap) return;
+  const auras = computeBannerAuras(snap);
   const s = view.scale;
   const t = now / 1000;
   const selected = gs.selection?.kind === 'tower' ? gs.selection.id : -1;
@@ -1075,6 +1135,42 @@ function drawTowers(gs: GameStore, interp: InterpResult | null, now: number, dt:
       g.arc(toX(cx + 0.5), toY(cy + 0.5), lvl.slowAura.radius * s, 0, Math.PI * 2);
       g.fill();
       g.stroke();
+    }
+
+    // aura del Estandarte: anillo cálido en el suelo, siempre visible. El tono
+    // vira a celeste si el aura es de celeridad (hastebanner).
+    if (lvl.auraDamage !== undefined || lvl.auraHaste !== undefined) {
+      const pulse = 0.5 + Math.sin(t * 2.4) * 0.12;
+      const haste = (lvl.auraHaste ?? 0) > 0;
+      const fill = haste ? `rgba(79,195,247,${0.05 + pulse * 0.05})` : `rgba(255,202,40,${0.05 + pulse * 0.05})`;
+      const stroke = haste ? `rgba(129,212,250,${0.35 + pulse * 0.2})` : `rgba(255,213,79,${0.4 + pulse * 0.2})`;
+      g.fillStyle = fill;
+      g.strokeStyle = stroke;
+      g.lineWidth = 1.5;
+      g.setLineDash([s * 0.18, s * 0.12]);
+      g.beginPath();
+      g.arc(toX(cx + 0.5), toY(cy + 0.5), lvl.range * s, 0, Math.PI * 2);
+      g.fill();
+      g.stroke();
+      g.setLineDash([]);
+    }
+
+    // brillito en las torres reforzadas por algún Estandarte (barato: un anillo)
+    const buff = auras.get(id);
+    if (buff && (buff.dmg > 0 || buff.haste > 0)) {
+      const pulse = 0.55 + Math.sin(t * 3.5 + id) * 0.45;
+      const both = buff.dmg > 0 && buff.haste > 0;
+      // dorado = daño, celeste = celeridad; si ambos, se dibujan los dos anillos
+      const rings: string[] = [];
+      if (buff.dmg > 0) rings.push(`rgba(255,213,79,${0.35 * pulse})`);
+      if (buff.haste > 0) rings.push(`rgba(129,212,250,${0.35 * pulse})`);
+      for (let ri = 0; ri < rings.length; ri++) {
+        g.strokeStyle = rings[ri];
+        g.lineWidth = Math.max(1.5, s * 0.05);
+        g.beginPath();
+        g.arc(toX(cx + 0.5), toY(cy + 0.5), s * (0.4 + (both ? ri * 0.06 : 0)), 0, Math.PI * 2);
+        g.stroke();
+      }
     }
 
     // rango de la torre seleccionada
@@ -1398,6 +1494,42 @@ function drawTowerArt(
       }
       break;
     }
+    case 'banner': {
+      // mástil de madera clavado en la base
+      g.strokeStyle = '#5d4037';
+      g.lineWidth = Math.max(2, s * 0.06 * grow);
+      g.lineCap = 'round';
+      g.beginPath();
+      g.moveTo(0, s * 0.26);
+      g.lineTo(0, -s * 0.4 * grow);
+      g.stroke();
+      // remate dorado en la punta
+      g.fillStyle = '#ffd54f';
+      g.beginPath();
+      g.arc(0, -s * 0.42 * grow, s * 0.045 * grow, 0, Math.PI * 2);
+      g.fill();
+      // bandera ondeante en el color del dueño (adaptado de la del castillo)
+      const top = -s * 0.4 * grow;
+      const wav = Math.sin(t * 5) * s * 0.035;
+      const flagW = s * 0.34 * grow;
+      const flagH = s * 0.22 * grow;
+      g.fillStyle = ownerColor;
+      g.beginPath();
+      g.moveTo(0, top);
+      g.quadraticCurveTo(flagW * 0.5, top + s * 0.02 + wav, flagW, top + s * 0.03 - wav);
+      g.lineTo(flagW, top + flagH - wav);
+      g.quadraticCurveTo(flagW * 0.5, top + flagH - s * 0.02 + wav, 0, top + flagH);
+      g.closePath();
+      g.fill();
+      // pliegue sombreado para dar volumen a la tela
+      g.strokeStyle = 'rgba(0,0,0,0.18)';
+      g.lineWidth = Math.max(1, s * 0.02);
+      g.beginPath();
+      g.moveTo(flagW * 0.5, top + s * 0.04 + wav * 0.5);
+      g.quadraticCurveTo(flagW * 0.5, top + flagH * 0.5, flagW * 0.5, top + flagH - s * 0.02 + wav * 0.5);
+      g.stroke();
+      break;
+    }
   }
   void def;
 
@@ -1551,6 +1683,40 @@ function drawSpecFlourish(type: TowerTypeId, spec: number, s: number, t: number,
         g.beginPath();
         g.arc(Math.cos(a) * s * 0.3, Math.sin(a) * s * 0.3 - s * 0.1, s * 0.04, 0, Math.PI * 2);
         g.fill();
+      }
+      break;
+    }
+    case 'warbanner': {
+      // gallardete rojo extra ondeando bajo la bandera + destellos marciales
+      const top = -s * 0.4 * grow;
+      const wav = Math.sin(t * 5 + 1) * s * 0.04;
+      g.fillStyle = '#e53935';
+      g.beginPath();
+      g.moveTo(0, top + s * 0.24 * grow);
+      g.quadraticCurveTo(s * 0.18 * grow, top + s * 0.26 * grow + wav, s * 0.34 * grow, top + s * 0.24 * grow - wav);
+      g.lineTo(s * 0.24 * grow, top + s * 0.34 * grow - wav);
+      g.quadraticCurveTo(s * 0.14 * grow, top + s * 0.3 * grow + wav, 0, top + s * 0.34 * grow);
+      g.closePath();
+      g.fill();
+      g.fillStyle = `rgba(255,138,101,${0.5 + Math.sin(t * 12) * 0.4})`;
+      for (let i = 0; i < 4; i++) {
+        const a = t * 2 + (i * Math.PI) / 2;
+        g.beginPath();
+        g.arc(Math.cos(a) * s * 0.28, Math.sin(a) * s * 0.28 - s * 0.05, s * 0.035, 0, Math.PI * 2);
+        g.fill();
+      }
+      break;
+    }
+    case 'hastebanner': {
+      // estelas celestes de velocidad girando alrededor
+      g.strokeStyle = `rgba(129,212,250,${0.55 + Math.sin(t * 10) * 0.35})`;
+      g.lineWidth = Math.max(1.5, s * 0.03);
+      g.lineCap = 'round';
+      for (let i = 0; i < 4; i++) {
+        const a = t * 3.2 + (i * Math.PI) / 2;
+        g.beginPath();
+        g.arc(0, -s * 0.02, s * 0.3 * grow, a, a + Math.PI * 0.4);
+        g.stroke();
       }
       break;
     }
