@@ -136,8 +136,14 @@ function processEvents(events: GameEvent[]): void {
         break;
       }
       case 'sell':
-        floatText(ev.x, ev.y, `+🪙${ev.refund}`, '#ffd54f', 13);
-        sfx.sell(panOf(ev.x));
+        if (ev.refund > 0) {
+          floatText(ev.x, ev.y, `+🪙${ev.refund}`, '#ffd54f', 13);
+          sfx.sell(panOf(ev.x));
+        } else {
+          // objeto sin reembolso (p. ej. una Trampa de púas agotada): poof discreto,
+          // sin texto de oro ni sonido de caja, para no spamear con muchas trampas.
+          burst(ev.x, ev.y, '#b0bec5', 8, 1.8);
+        }
         break;
       case 'reject':
         if (ev.playerId === store.playerId) {

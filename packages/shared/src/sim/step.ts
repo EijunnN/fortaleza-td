@@ -957,7 +957,7 @@ function stepTowers(state: GameState, ctx: SimContext, events: GameEvent[], aura
 
 // Trampa de púas (F4.2): NO dispara. Cada tick que hay ≥1 enemigo sobre su celda,
 // golpea a TODOS los de la celda (daño FÍSICO, funciona contra inmunes) y consume 1
-// carga. A 0 cargas se auto-elimina (aviso `sys`). Determinista: orden estable de
+// carga. A 0 cargas se auto-elimina (poof discreto, SIN aviso de chat). Determinista: orden estable de
 // torres y enemigos, sin RNG. Se ejecuta tras el movimiento de enemigos.
 function stepTraps(state: GameState, ctx: SimContext, events: GameEvent[]): void {
   let removedAny = false;
@@ -984,8 +984,9 @@ function stepTraps(state: GameState, ctx: SimContext, events: GameEvent[]): void
       events.push({ e: 'hit', x: trap.cx + 0.5, y: trap.cy + 0.5, r: 0.4, kind: 'impact' });
       if (trap.charges <= 0) {
         removedAny = true;
+        // Sin aviso de chat: con varias trampas agotándose a la vez spameaba el chat.
+        // El `sell` (refund 0) le basta al cliente para un poof discreto sin texto de oro.
         events.push({ e: 'sell', x: trap.cx + 0.5, y: trap.cy + 0.5, refund: 0 });
-        events.push({ e: 'sys', msg: '🪤 Una Trampa de púas se agotó y desapareció.' });
       }
     }
   }
