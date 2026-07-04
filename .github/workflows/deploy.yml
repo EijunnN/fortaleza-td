@@ -1,17 +1,21 @@
 name: Sync upstream & deploy to Cloudflare
 
+# Mantiene este fork SIEMPRE al día con el repo padre (EijunnN/fortaleza-td).
 # Se ejecuta:
+#  - cada 15 min: baja los commits nuevos del padre a este fork
 #  - en cada push a main (tus propios cambios)
-#  - cada 6 horas: sincroniza el repo padre (EijunnN/fortaleza-td) y redespliega
 #  - manualmente desde la pestaña Actions (workflow_dispatch)
+#
+# El deploy a Cloudflare solo ocurre cuando REALMENTE hubo cambios nuevos
+# (o cuando tú haces push / lo lanzas a mano), para no redesplegar en vano.
 on:
   push:
     branches: [main]
   schedule:
-    - cron: "0 */6 * * *"
+    # Cada 15 min, con offset (evita el :00 que GitHub suele retrasar).
+    - cron: "5,20,35,50 * * * *"
   workflow_dispatch:
 
-# Evita despliegues solapados (el cron y un push simultáneo).
 concurrency:
   group: deploy-cloudflare
   cancel-in-progress: false
@@ -20,8 +24,11 @@ permissions:
   contents: write
 
 jobs:
-  sync-and-deploy:
+  # 1) Sincroniza el fork con el repo padre. Corre SIEMPRE (barato: ~15s).
+  sync:
     runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.sync.outputs.changed }}
     steps:
       - name: Checkout fork
         uses: actions/checkout@v4
@@ -29,10 +36,11 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Trae los commits nuevos del repo padre y los mezcla en este fork.
-      # Nuestros únicos cambios propios son .github/ y wrangler.jsonc (aditivos),
-      # así que la mezcla es limpia salvo que el upstream toque esas mismas líneas.
+      # Trae y mezcla TODOS los commits nuevos del padre. Nuestra única
+      # divergencia es .github/ y wrangler.jsonc (aditivos), así que la
+      # mezcla es limpia salvo que el upstream toque esas mismas líneas.
       - name: Sync from upstream
+        id: sync
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -43,10 +51,21 @@ jobs:
           AFTER=$(git rev-parse HEAD)
           if [ "$BEFORE" != "$AFTER" ]; then
             git push origin main
+            echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "::notice::Sincronizados commits nuevos del upstream."
           else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "::notice::Ya estaba al día con el upstream."
           fi
+
+  # 2) Compila y despliega. Solo si hubo cambios del padre, o si fue push/manual.
+  deploy:
+    needs: sync
+    if: ${{ needs.sync.outputs.changed == 'true' || github.event_name != 'schedule' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
