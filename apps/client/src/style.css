@@ -861,24 +861,29 @@ html, body {
 .place-btn.no { background: rgba(30, 36, 52, 0.95); color: var(--fg); }
 .place-btn:active { transform: scale(0.92); }
 
+/* Toasts DISCRETOS: abajo-centro, sobre el aviso de colocación (108px) — en
+   zona de HUD, no en medio del tablero. Antes vivían al 38% de la altura y
+   hasta 4 de casi pantalla completa tapaban justo donde se juega. */
 #toasts {
   position: absolute;
-  top: 38%;
+  bottom: 148px;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   pointer-events: none;
-  max-width: 92vw;
+  max-width: min(480px, 92vw);
+  z-index: 40;
 }
 .toast {
-  background: rgba(14, 18, 28, 0.94);
+  background: rgba(14, 18, 28, 0.92);
   border: 1px solid var(--danger);
   color: var(--fg);
-  border-radius: 12px;
-  padding: 9px 18px;
+  border-radius: 999px;
+  padding: 7px 14px;
+  font-size: 0.85rem;
   font-weight: 600;
   text-align: center;
   animation: toast-in 0.2s ease-out, toast-out 0.4s ease-in 1.8s forwards;
@@ -1123,6 +1128,12 @@ html, body {
   .tcard.group-start { margin-left: 12px; }
   .tcard.group-start::before { left: -7px; }
   #hud-placing { bottom: 86px; font-size: 0.75rem; padding: 6px 10px; }
+  /* toasts: aún más discretos y pegados a la barra; con la hoja inferior del
+     panel abierta pasan ARRIBA (bajo la barra de stats), que siempre queda libre
+     — anclarlos sobre la hoja los dejaba flotando cuando esta es corta */
+  #toasts { bottom: 122px; gap: 4px; }
+  .toast { font-size: 0.78rem; padding: 6px 12px; }
+  .panel-open #toasts { bottom: auto; top: 92px; }
   /* Barra de torres: UNA sola fila con scroll horizontal + snap (envolver en dos
      filas tapaba demasiado tablero). El degradado de los bordes avisa de que hay
      más torres a los lados; ninguna queda inaccesible. */
@@ -1218,6 +1229,7 @@ html, body {
   }
   #hud-placing { bottom: 80px; }
   #hud-preview { display: none; }
+  #toasts { bottom: 112px; }
 }
 
 /* ---------- reproductor de repeticiones ---------- */

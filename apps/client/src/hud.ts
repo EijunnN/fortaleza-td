@@ -946,12 +946,23 @@ export function syncSpeedButton(): void {
 
 export function toast(text: string, kind: 'error' | 'info' = 'error'): void {
   const box = $('toasts');
-  const el = document.createElement('div');
+  // el mismo texto NO se apila: refresca la píldora existente (reinicia sus
+  // animaciones y su temporizador). Antes, repetir una acción llenaba la
+  // pantalla con hasta 4 copias del mismo aviso.
+  const dup = [...box.children].find((c): c is HTMLElement => c.textContent === text);
+  const el = dup ?? document.createElement('div');
   el.className = `toast ${kind}`;
   el.textContent = text;
-  box.appendChild(el);
-  setTimeout(() => el.remove(), 2400);
-  while (box.children.length > 4) box.firstChild?.remove();
+  if (dup) {
+    el.style.animation = 'none';
+    void el.offsetWidth; // reflow: reinicia la animación de entrada/salida
+    el.style.animation = '';
+  } else {
+    box.appendChild(el);
+  }
+  clearTimeout(Number(el.dataset.timer));
+  el.dataset.timer = String(setTimeout(() => el.remove(), 2400));
+  while (box.children.length > 3) box.firstChild?.remove();
 }
 
 export function addChat(from: string, color: string, text: string): void {
