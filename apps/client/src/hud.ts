@@ -253,6 +253,7 @@ function specialStats(lvl: TowerLevelDef): string[] {
   if (lvl.auraBounty) out.push(`+${Math.round(lvl.auraBounty * 100)}% oro por baja`);
   if (lvl.charges && lvl.charges > 1) out.push(`${lvl.charges} cargas`);
   if (lvl.shots && lvl.shots > 1) out.push(`${lvl.shots} disparos`);
+  if (lvl.airBonus && lvl.airBonus > 1) out.push(`×${lvl.airBonus} a voladores`);
   if (lvl.pierceArmor) out.push('Antiarmadura');
   if (lvl.minRange) out.push(`Mín. ${lvl.minRange}`);
   return out;
@@ -465,6 +466,7 @@ function statBlock(lvl: TowerLevelDef, next: TowerLevelDef | null, aura?: Client
   if (lvl.poisonBountyMult) lines.push(`Botín <b>×${lvl.poisonBountyMult}</b> por bajas de su veneno`);
   if (lvl.auraBounty) lines.push(stat('Aura de oro', `+${Math.round(lvl.auraBounty * 100)}%`, next?.auraBounty ? `+${Math.round(next.auraBounty * 100)}%` : null));
   if (lvl.incomePerWave) lines.push(stat('Ingreso', `🪙${lvl.incomePerWave}${lvl.incomeToAll ? ' a todos' : ''}`, next?.incomePerWave ? `🪙${next.incomePerWave}` : null));
+  if (lvl.airBonus && lvl.airBonus > 1) lines.push(`Antiaérea: <b>×${lvl.airBonus}</b> de daño a voladores`);
   if (lvl.pierceArmor) lines.push('Perfora armadura');
   return lines;
 }
@@ -1019,7 +1021,11 @@ export function toast(text: string, kind: 'error' | 'info' = 'error'): void {
 }
 
 export function addChat(from: string, color: string, text: string): void {
-  for (const logId of ['lobby-chat', 'game-chat-log']) {
+  // Los avisos de SISTEMA (sin autor: "llamó la oleada", tala del orco, jefes…)
+  // son feedback EFÍMERO del juego: van solo al killfeed in-game (donde se
+  // desvanecen) y NUNCA al chat de la sala, que queda reservado a mensajes
+  // reales de jugadores. Sin esto, el lobby-chat se llenaba de spam de partida.
+  for (const logId of from ? ['lobby-chat', 'game-chat-log'] : ['game-chat-log']) {
     const log = document.getElementById(logId);
     if (!log) continue;
     const el = document.createElement('div');
