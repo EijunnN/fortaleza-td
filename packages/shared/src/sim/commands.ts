@@ -1,6 +1,6 @@
 import type { GameEvent, GameState, MapDef, PlayerCommand } from '../types.js';
 import { TOWERS, towerLevel, hasRank2, rank2Cost } from '../balance/towers.js';
-import { FUSION_ORDER, findFusion } from '../balance/fusions.js';
+import { FUSION_ORDER, findFusion, towerFires } from '../balance/fusions.js';
 import {
   CALL_WAVE_GOLD_PER_SEC,
   ORC_RATES,
@@ -74,6 +74,8 @@ export function applyCommands(
           growthBonus: 0,
           goldGen: 0,
           fusion: -1,
+          focusId: 0,
+          halted: false,
         });
         events.push({ e: 'place', x: cmd.cx + 0.5, y: cmd.cy + 0.5, towerType: cmd.towerType });
         break;
@@ -86,8 +88,8 @@ export function applyCommands(
           reject(events, playerId, 'Solo el dueño puede mejorar esta torre');
           break;
         }
-        // las torres de camino (Trampa/Barril) no se mejoran (se agotan y desaparecen)
-        if (TOWERS[tower.type].onPathOnly) {
+        // las torres de camino (Trampa/Barril) y el Sentry no se mejoran
+        if (TOWERS[tower.type].onPathOnly || TOWERS[tower.type].detects) {
           reject(events, playerId, 'Esta torre no se puede mejorar');
           break;
         }
@@ -156,6 +158,11 @@ export function applyCommands(
           reject(events, playerId, 'Una fusión no se puede especializar');
           break;
         }
+        // el Sentry (y las torres de camino) no se especializan
+        if (TOWERS[tower.type].detects || TOWERS[tower.type].onPathOnly) {
+          reject(events, playerId, 'Esta torre no se puede especializar');
+          break;
+        }
         if (tower.level < 3) {
           reject(events, playerId, 'Primero llévala al nivel máximo');
           break;
@@ -216,6 +223,57 @@ export function applyCommands(
         break;
       }
 
+      // Lote 4 · FOCUS: la torre ataca a ESE enemigo (enemyId 0 = quitar el focus).
+      // Validación completa aquí (el comando llega del cliente sin confiar): dueño,
+      // torre que DISPARA (estandarte/mina/alquimista/sentry/trampas no apuntan) y
+      // enemigo existente Y visible (un invisible no detectado no se puede enfocar:
+      // no lo ves — coherente con el hit-test del cliente y con pickTarget).
+      case 'focus': {
+        const tower = state.towers.find((t) => t.id === cmd.towerId);
+        if (!tower) break;
+        if (tower.owner !== playerId) {
+          reject(events, playerId, 'Solo el dueño puede dar órdenes a esta torre');
+          break;
+        }
+        if (!towerFires(tower)) {
+          reject(events, playerId, 'Esta torre no dispara');
+          break;
+        }
+        if (cmd.enemyId === 0) {
+          tower.focusId = 0; // volver al targetMode automático
+          break;
+        }
+        const enemy = state.enemies.find((e) => e.id === cmd.enemyId && e.hp > 0);
+        if (!enemy) {
+          reject(events, playerId, 'Ese enemigo ya no está');
+          break;
+        }
+        if (enemy.invisible && !enemy.detected) {
+          reject(events, playerId, 'No puedes ver a ese enemigo');
+          break;
+        }
+        tower.focusId = enemy.id;
+        break;
+      }
+
+      // Lote 4 · STOP/REANUDAR: on=true la torre deja de disparar; on=false vuelve.
+      // Misma validación que focus (solo torres que disparan: las auras/economía
+      // no disparan, así que "detenerlas" no significa nada).
+      case 'halt': {
+        const tower = state.towers.find((t) => t.id === cmd.towerId);
+        if (!tower) break;
+        if (tower.owner !== playerId) {
+          reject(events, playerId, 'Solo el dueño puede dar órdenes a esta torre');
+          break;
+        }
+        if (!towerFires(tower)) {
+          reject(events, playerId, 'Esta torre no dispara');
+          break;
+        }
+        tower.halted = cmd.on === true;
+        break;
+      }
+
       // F4.3 · Fusión: dos torres ESPECIALIZADAS, ADYACENTES (Chebyshev 1), del
       // MISMO dueño, cuyos tipos formen una receta. Consume ambas y deja UNA torre
       // fusionada en la celda de `keepId` (la otra celda queda libre). Gratis: el
@@ -265,6 +323,11 @@ export function applyCommands(
         keep.cooldownLeft = 0;
         keep.charges = 0;
         keep.growthBonus = 0;
+        // Lote 4: la fusión es una torre "nueva" — se limpian focus y stop. Crítico
+        // para el Corazón de Invierno (aura pura, no dispara): un `halted` heredado
+        // sería imposible de quitar (halt solo acepta torres que disparan).
+        keep.focusId = 0;
+        keep.halted = false;
         state.towers = state.towers.filter((t) => t.id !== other.id);
         events.push({ e: 'fuse', x: keep.cx + 0.5, y: keep.cy + 0.5, fusion: recipe.id, name: recipe.name });
         break;
@@ -314,6 +377,49 @@ export function applyCommands(
         player.stats.goldSpent += cost;
         player.orcLevel += 1;
         events.push({ e: 'orc', playerId, level: player.orcLevel, rate: ORC_RATES[player.orcLevel - 1] });
+        break;
+      }
+
+      // F7.1 · TRANSFERENCIA de recursos a un aliado (estilo Green TD). El comando
+      // llega del cliente SIN validar → aquí se comprueba todo: cantidades enteras
+      // ≥0 (al menos una >0), destinatario existente y distinto de uno mismo, y
+      // fondos suficientes. Mueve oro/madera y ajusta la telemetría con el MISMO
+      // criterio que el resto de comandos (oro que sale = goldSpent; oro que entra
+      // = goldEarned). Determinista: sin RNG ni reloj.
+      case 'give': {
+        const { to, gold, wood } = cmd;
+        if (
+          !Number.isInteger(gold) ||
+          !Number.isInteger(wood) ||
+          gold < 0 ||
+          wood < 0 ||
+          (gold === 0 && wood === 0)
+        ) {
+          reject(events, playerId, 'Cantidad inválida para enviar');
+          break;
+        }
+        if (to === playerId) {
+          reject(events, playerId, 'No puedes enviarte recursos a ti mismo');
+          break;
+        }
+        const receiver = state.players.find((p) => p.id === to);
+        if (!receiver) {
+          reject(events, playerId, 'Ese jugador no está en la partida');
+          break;
+        }
+        if (player.gold < gold || player.wood < wood) {
+          reject(events, playerId, 'No te alcanzan los recursos para enviar');
+          break;
+        }
+        player.gold -= gold;
+        player.wood -= wood;
+        receiver.gold += gold;
+        receiver.wood += wood;
+        // el oro donado cuenta como gastado por el emisor y ganado por el receptor
+        // (la madera no tiene stat propio). Coherente con sell/call_wave/place.
+        player.stats.goldSpent += gold;
+        receiver.stats.goldEarned += gold;
+        events.push({ e: 'give', from: playerId, to, gold, wood });
         break;
       }
 

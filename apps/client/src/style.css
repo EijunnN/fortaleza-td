@@ -85,6 +85,8 @@ html, body {
 .btn.big { width: 100%; padding: 14px; font-size: 1.1rem; margin-top: 14px; }
 .btn.small { padding: 7px 12px; font-size: 0.9rem; }
 .btn.ghost { background: rgba(34, 44, 68, 0.6); border-color: var(--border); }
+/* acción destructiva/de salida (abandonar partida): rojo tenue con borde */
+.btn.danger { background: rgba(239, 83, 80, 0.14); border-color: rgba(239, 83, 80, 0.55); color: var(--danger); }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; filter: none; transform: none; box-shadow: none; }
 
 .field { display: flex; flex-direction: column; gap: 5px; margin: 10px 0; }
@@ -550,32 +552,114 @@ html, body {
 .stat.warn { color: var(--accent-hi); border-color: rgba(255, 213, 79, 0.5); }
 @keyframes pulse { 50% { opacity: 0.55; } }
 
-#hud-players {
+/* ---------- tabla de jugadores en vivo (F7.1) ---------- */
+/* REEMPLAZA a los antiguos chips de jugadores: vive fija en la esquina superior
+   izquierda (abierta por defecto en escritorio), 📊 la alterna. Tocar el mapa NO
+   la cierra (es un componente persistente del HUD). */
+#scoreboard-panel {
   position: absolute;
-  top: 56px; left: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  pointer-events: none;
+  top: 52px;
+  left: 12px;
+  z-index: 31;
+  width: 340px;
+  max-width: calc(100vw - 24px);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  padding: 10px 12px;
+  pointer-events: auto;
 }
-.pchip {
-  display: flex; align-items: center; gap: 6px;
-  background: rgba(12, 16, 26, 0.7);
-  border: 1px solid rgba(44, 56, 84, 0.55);
-  border-radius: 999px;
-  padding: 3px 10px;
-  font-size: 0.8rem;
-}
-.pchip .player-dot { width: 9px; height: 9px; }
-.pchip .pgold { color: var(--accent-hi); margin-left: 4px; }
-.pchip.offline { opacity: 0.4; }
-/* métricas en vivo (⚔️ dps · 🪙 oleada · 💔 vidas): última chip de la columna */
-.pchip.live-chip {
+.sb-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.sb-head h4 { margin: 0; font-size: 0.95rem; }
+.sb-head .btn { padding: 2px 9px; }
+#scoreboard-body table { width: 100%; border-collapse: collapse; font-size: 0.82rem; font-variant-numeric: tabular-nums; }
+#scoreboard-body th { color: var(--fg-dim); font-weight: 600; font-size: 0.72rem; text-align: right; padding: 2px 5px; }
+#scoreboard-body th.sb-name { text-align: left; }
+#scoreboard-body td { padding: 3px 5px; text-align: right; white-space: nowrap; }
+#scoreboard-body td.sb-name { text-align: left; max-width: 100px; overflow: hidden; text-overflow: ellipsis; }
+#scoreboard-body tr.sb-me td { background: rgba(255, 213, 79, 0.08); }
+#scoreboard-body tr.offline td { opacity: 0.45; }
+#scoreboard-body .sb-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; box-shadow: 0 0 5px currentColor; vertical-align: middle; }
+#scoreboard-body .sb-dmg { color: var(--accent-hi); }
+#scoreboard-body .sb-kills { color: #f48fb1; }
+#scoreboard-body .btn.sb-give { padding: 1px 8px; font-size: 0.9rem; line-height: 1.4; }
+/* pie de métricas en vivo propias (⚔️ dps · 🪙 oleada · 💔 vidas): heredero del
+   antiguo chip ⚔ de la esquina, ahora dentro de la tabla */
+.sb-live {
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px solid var(--border);
   color: var(--fg-dim);
+  font-size: 0.78rem;
   font-variant-numeric: tabular-nums;
-  border-color: rgba(255, 213, 79, 0.25);
 }
-.pchip.live-chip .live-bad { color: var(--danger); font-weight: 800; }
+.sb-live .live-bad { color: var(--danger); font-weight: 800; }
+
+/* mini-formulario de regalo (🎁): aparece bajo la tabla al elegir un aliado */
+#scoreboard-give:not(:empty) { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.sb-give-title { font-size: 0.85rem; margin-bottom: 7px; }
+.sb-give-title b { color: var(--accent-hi); }
+.sb-give-row { display: flex; align-items: center; gap: 5px; margin-bottom: 6px; }
+.sb-give-row .sb-give-lbl { width: 20px; text-align: center; flex-shrink: 0; }
+.sb-give-row input {
+  width: 64px; flex-shrink: 0; padding: 6px; background: var(--bg);
+  border: 1px solid var(--border); border-radius: 8px; color: var(--fg);
+  font-size: 0.85rem; font-variant-numeric: tabular-nums;
+}
+.sb-give-row .btn.sb-quick { padding: 5px 7px; font-size: 0.72rem; flex: 1; min-width: 0; }
+.sb-give-actions { display: flex; gap: 6px; margin-top: 8px; }
+.sb-give-actions .btn { flex: 1; font-size: 0.82rem; padding: 8px 4px; }
+@media (max-height: 500px) {
+  #scoreboard-panel { top: 40px; padding: 8px 10px; }
+}
+
+/* ---------- tienda de items (Lote 3) ---------- */
+/* mismo estilo que la tabla 📊: panel flotante centrado arriba, se cierra al tocar fuera */
+#shop-panel {
+  position: absolute;
+  top: 52px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 31;
+  width: 320px;
+  max-width: calc(100vw - 24px);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  padding: 10px 12px;
+  pointer-events: auto;
+}
+#shop-grid { display: flex; flex-direction: column; gap: 8px; }
+.shop-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 9px 11px;
+  background: rgba(12, 16, 26, 0.55);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--fg);
+  cursor: pointer;
+}
+.shop-item:hover { border-color: rgba(41, 182, 246, 0.6); }
+.shop-item.selected { border-color: var(--accent-hi); box-shadow: 0 0 0 1px var(--accent-hi) inset; }
+.shop-item.poor { opacity: 0.5; }
+.shop-item .shop-icon { font-size: 1.5rem; flex-shrink: 0; }
+.shop-item .shop-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.shop-item .shop-info b { font-size: 0.92rem; }
+.shop-item .shop-desc { font-size: 0.74rem; color: var(--fg-dim); line-height: 1.25; }
+.shop-item .shop-cost { flex-shrink: 0; color: var(--accent-hi); font-weight: 700; font-variant-numeric: tabular-nums; }
+@media (max-height: 500px) {
+  #shop-panel { top: 40px; padding: 8px 10px; }
+}
 
 /* ---------- panel de ajustes de sonido (⚙) ---------- */
 #settings-panel {
@@ -675,6 +759,7 @@ html, body {
 .wave-tag.blessed { background: rgba(255, 213, 79, 0.22); border-color: rgba(255, 213, 79, 0.6); color: #ffe082; }
 .wave-tag.flying  { background: rgba(236, 64, 122, 0.20); border-color: rgba(236, 64, 122, 0.55); color: #f8bbd0; }
 .wave-tag.boss    { background: rgba(239, 83, 80, 0.22);  border-color: rgba(239, 83, 80, 0.6);  color: #ffcdd2; }
+.wave-tag.invisible { background: rgba(41, 182, 246, 0.20); border-color: rgba(41, 182, 246, 0.6); color: #b3e5fc; }
 
 /* franja de información al elegir torre para construir */
 #hud-placing {
@@ -885,6 +970,25 @@ html, body {
   animation: pulse 0.8s infinite;
 }
 
+/* Lote 4 · control avanzado: botón 🎯 armado (esperando el tap sobre un enemigo),
+   línea "Atacando a…" y pista de hotkey [X]/[F] dentro de los botones */
+#hud-panel .btn.armed {
+  background: var(--accent);
+  color: #221800;
+  animation: pulse 0.8s infinite;
+}
+#hud-panel .focus-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 0.8rem;
+  color: var(--fg-dim);
+}
+#hud-panel .focus-line .btn { flex: 0 0 auto; font-size: 0.72rem; padding: 4px 8px; }
+#hud-panel .khint { font-size: 0.68rem; color: var(--fg-dim); font-weight: 600; }
+#hud-panel .btn.armed .khint { color: inherit; }
+
 /* botón de minimapa desactivado */
 #btn-minimap.off {
   opacity: 0.4;
@@ -927,6 +1031,21 @@ html, body {
 /* durante la PAUSA, el chat sube por encima del velo de pausa (z 50) para que
    se pueda seguir hablando mientras la partida está detenida */
 .paused #hud-chat { z-index: 60; }
+
+/* espectador en móvil (issue #5): botón flotante 🏗 que muestra/esconde la
+   barra de torres (que en el espectador es "modo sugerencia"). Solo hud.ts lo
+   destapa (quita `hidden`) siendo espectador; por encima del breakpoint móvil
+   se fuerza oculto SIEMPRE, pase lo que pase con el estado de JS. */
+#btn-towers-toggle {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 21;
+  pointer-events: auto;
+}
+@media (min-width: 701px) {
+  #btn-towers-toggle { display: none !important; }
+}
 
 /* burbuja de confirmación de colocación (táctil) */
 #place-confirm {
@@ -1107,11 +1226,79 @@ html, body {
 .fusion-recipe .fplus { color: var(--fg-dim); font-weight: 800; }
 .fusion-recipe .fresult { font-size: 1rem; }
 
+/* ---------- guía: pestaña Atajos (teclas editables) ---------- */
+.key-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 10px; }
+.shortcut-msg { font-size: 0.82rem; color: var(--fg-dim); min-height: 1.1em; }
+.key-group { margin-top: 16px; }
+.key-group-title {
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: var(--accent-hi);
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.key-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 4px;
+  border-bottom: 1px solid rgba(44, 56, 84, 0.5);
+}
+.key-row:last-child { border-bottom: none; }
+.key-name { font-size: 0.86rem; color: var(--fg); }
+.key-row.info .key-name { color: var(--fg-dim); min-width: 42%; }
+.key-static { font-size: 0.78rem; color: var(--fg-dim); text-align: right; }
+.key-btn {
+  min-width: 2.6rem;
+  padding: 5px 10px;
+  font-size: 0.82rem;
+  font-weight: 800;
+  font-family: inherit;
+  color: var(--fg);
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-bottom-width: 3px;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: transform 0.05s ease, border-color 0.1s ease;
+}
+.key-btn:hover { border-color: var(--accent2); }
+.key-btn:active { transform: translateY(1px); border-bottom-width: 1px; }
+.key-btn.capturing {
+  color: var(--accent-hi);
+  border-color: var(--accent);
+  background: rgba(255, 179, 0, 0.14);
+  min-width: 9.5rem;
+}
+/* ---------- guía: pestaña de TORRES ---------- */
+.tower-card .ticon-wrap { display: inline-flex; align-items: center; justify-content: center; width: 1.8rem; height: 1.8rem; }
+.tower-card .ticon-wrap .tsprite2 { display: none; width: 1.8rem; height: 1.8rem; object-fit: contain; }
+.tower-card .ticon-wrap .eicon { font-size: 1.6rem; line-height: 1; }
+.tcosts { font-size: 0.76rem; color: var(--fg-dim); margin: 2px 0 6px; }
+.tcosts .tdim, .tfuse.tdim, .edesc.tdim { color: var(--fg-dim); opacity: 0.75; }
+.tspec-list { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 6px; }
+.tspec {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+.tspec-head { font-size: 0.82rem; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.tspec .edesc { margin: 3px 0; font-size: 0.76rem; }
+.tspec-cost { font-size: 0.72rem; font-weight: 700; color: var(--accent-hi); white-space: nowrap; }
+.tspec-r2 { font-size: 0.74rem; color: var(--fg-dim); border-top: 1px dashed var(--border); padding-top: 4px; margin-top: 2px; }
+.tfuse { font-size: 0.76rem; line-height: 1.4; margin-top: 6px; color: var(--fg); }
+
 @media (max-width: 700px) {
   .overlay-card.bestiary-card { padding: 18px 14px; }
   .bestiary-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
   .enemy-card { padding: 8px 10px; }
   .guide-tabs .tab { font-size: 0.76rem; padding: 8px 4px; }
+  .guide-tabs { flex-wrap: wrap; }
+  .key-static { max-width: 52%; }
 }
 
 /* podio de fin de partida */
@@ -1257,6 +1444,14 @@ html, body {
   .tcard .tname { display: none; }
   .tcard .thk { display: none; }
   .tcard .tcost { font-size: 0.72rem; }
+  /* espectador en móvil (issue #5): la barra de torres empieza ESCONDIDA (roba
+     media pantalla en "modo sugerencia" y el espectador ni construye); el 🏗
+     la destapa. Se reinicia a escondida en cada partida — ver applySpectatorUI
+     en hud.ts, que NO persiste el estado. */
+  #screen-game.spectating #hud-towers { display: none; }
+  #screen-game.spectating.spec-towers-open #hud-towers { display: flex; }
+  /* con la barra destapada, el botón sube por encima de ella en vez de quedar tapado */
+  #screen-game.spectating.spec-towers-open #btn-towers-toggle { bottom: 92px; }
   /* botones de confirmación de colocación más grandes para el pulgar */
   .place-btn { width: 52px; height: 52px; font-size: 1.45rem; }
   /* barra superior: compacta y SIN solapes. Los stats (❤/oleada/🪙) van en UNA sola
@@ -1302,15 +1497,14 @@ html, body {
      tocándolo directo) y la Guía 📖 vive en la pausa — ahora cualquiera puede
      pausar, así que sigue al alcance de todos */
   #btn-minimap, #btn-guide { display: none; }
-  #hud-players { top: 46px; gap: 3px; }
-  .pchip { font-size: 0.68rem; padding: 2px 7px; }
+  #scoreboard-panel { top: 46px; }
 }
 
 /* pantallas muy bajas (móvil apaisado): compactar todo lo posible */
 @media (max-height: 500px) {
   #hud-top { padding: 4px 8px; }
   .stat { font-size: 0.75rem; padding: 3px 8px; }
-  #hud-players { top: 40px; }
+  #scoreboard-panel { top: 40px; }
   #hud-towers { padding: 6px 8px; padding-bottom: max(6px, env(safe-area-inset-bottom)); }
   .tcard { width: 58px; padding: 4px 3px 3px; }
   .tcard .ticon { font-size: 1.15rem; line-height: 1.3rem; }

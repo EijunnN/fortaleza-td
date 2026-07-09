@@ -12,9 +12,11 @@ import type {
 import type { AffixId } from '../types.js';
 import { ENEMIES } from '../balance/enemies.js';
 import { TOWERS, towerTargetsAir } from '../balance/towers.js';
-import { fusionOf, statsOf } from '../balance/fusions.js';
+import { fusionOf, statsOf, towerFires } from '../balance/fusions.js';
 import { generateWave, waveBountyMult, waveHpMult } from '../balance/waves.js';
 import {
+  ASSIST_MIN_DMG_FRAC,
+  ASSIST_SHARE,
   BLESSED_BOUNTY_MULT,
   BLESSED_BONUS_MULT,
   ELITE_BOUNTY_MULT,
@@ -107,9 +109,19 @@ function spawnEnemy(
     stunTowerId: 0,
     lastWpIdx: at ? at.wpIdx : 1,
     armorShredUntil: 0,
+    invisible: false,
+    detected: false,
+    dmgBy: {},
   };
   state.enemies.push(enemy);
   return enemy;
+}
+
+// Acredita `amount` de daño APLICADO al jugador `ownerId` contra este enemigo (para el
+// oro de asistencia). Se guarda por playerId, no por torre: si el dueño vende la torre
+// antes de la muerte, su crédito de daño SIGUE contando. Determinista (solo aritmética).
+function creditDamage(enemy: EnemyState, ownerId: string, amount: number): void {
+  enemy.dmgBy[ownerId] = (enemy.dmgBy[ownerId] ?? 0) + amount;
 }
 
 // Aplica SOLO el efecto de un afijo (sin tocar hp/botín/radio). Compartido por
@@ -229,6 +241,32 @@ function killEnemy(
     elite: enemy.elite,
     ...(alchExtra > 0 && killerName ? { alch: alchExtra } : {}),
   });
+  // ORO DE ASISTENCIA (co-op): el matador ya cobró su botín completo arriba. Ahora, si
+  // el MAYOR dañador acumulado NO es el matador y le hizo ≥ ASSIST_MIN_DMG_FRAC del maxHp,
+  // cobra un extra = round(botín × ASSIST_SHARE), mínimo 1. Determinista: el mayor se
+  // resuelve con desempate por playerId MENOR, independiente del orden de las claves.
+  // Solo paga si hubo matador con dueño (killerName): en solitario el matador es siempre
+  // su propio mayor dañador, así que nunca dispara. Las fugas/robos no llaman a killEnemy.
+  if (killerName) {
+    let topId = '';
+    let topDmg = -1;
+    for (const pid in enemy.dmgBy) {
+      const d = enemy.dmgBy[pid];
+      if (d > topDmg || (d === topDmg && pid < topId)) {
+        topDmg = d;
+        topId = pid;
+      }
+    }
+    if (topId && topId !== killerName && topDmg >= enemy.maxHp * ASSIST_MIN_DMG_FRAC) {
+      const assistant = state.players.find((p) => p.id === topId);
+      if (assistant) {
+        const assistGold = Math.max(1, Math.round(bounty * ASSIST_SHARE));
+        assistant.gold += assistGold;
+        assistant.stats.goldEarned += assistGold;
+        events.push({ e: 'assist', x: enemy.x, y: enemy.y, gold: assistGold, player: topId });
+      }
+    }
+  }
   const spawns: { type: EnemyTypeId; count: number }[] = [];
   if (def.spawnOnDeath) spawns.push(def.spawnOnDeath);
   // afijo explosivo: suelta larvas al morir (además de lo que ya suelte el tipo)
@@ -305,7 +343,10 @@ function damageEnemy(
   if (tower) {
     tower.damage += dmg;
     const owner = state.players.find((p) => p.id === tower.owner);
-    if (owner) owner.stats.damage += dmg;
+    if (owner) {
+      owner.stats.damage += dmg;
+      creditDamage(enemy, owner.id, dmg); // crédito para el oro de asistencia
+    }
   }
   if (enemy.hp <= 0) {
     killEnemy(state, ctx, enemy, sourceTowerId, events);
@@ -325,11 +366,43 @@ function pickTarget(
 ): EnemyState | null {
   const tx = tower.cx + 0.5;
   const ty = tower.cy + 0.5;
+
+  // Lote 4 · FOCUS: si la torre tiene un enemigo enfocado, ese enemigo MANDA
+  // sobre el targetMode… con matices (todos deterministas, solo leen el estado):
+  // - muerto/escapado (ya no está en state.enemies o hp<=0) → se LIMPIA el focus
+  //   y la torre vuelve a su targetMode normal;
+  // - vivo pero FUERA de rango (o aún no targeteable: invisible sin detectar,
+  //   aire/tierra que esta torre no alcanza, minRange del mortero) → la torre
+  //   ataca normal MIENTRAS TANTO y CONSERVA el focus para cuando vuelva a
+  //   entrar en alcance (decisión de UX: perder el focus por un hueco de
+  //   cobertura obligaría a re-enfocarlo a mano);
+  // - el multidisparo pasa `exclude` con los blancos ya tomados: si el enfocado
+  //   ya recibió el primer disparo, los extra se eligen por targetMode normal.
+  // El primer salto del Tesla usa este mismo pickTarget → respeta el focus.
+  if (tower.focusId > 0) {
+    const f = state.enemies.find((e) => e.id === tower.focusId);
+    if (!f || f.hp <= 0) {
+      tower.focusId = 0; // murió o escapó: volver al automático
+    } else if (!exclude || !exclude.has(f.id)) {
+      const fdef = ENEMIES[f.type];
+      const targetable =
+        !(f.invisible && !f.detected) && (fdef.flying ? canAir : canGround);
+      if (targetable) {
+        const d = dist(tx, ty, f.x, f.y);
+        if (d <= def.range && (!def.minRange || d >= def.minRange)) return f;
+      }
+      // vivo pero fuera de alcance / no visible: seguir con el targetMode normal
+    }
+  }
+
   let best: EnemyState | null = null;
   let bestScore = 0;
   for (const e of state.enemies) {
     if (e.hp <= 0) continue;
     if (exclude && exclude.has(e.id)) continue;
+    // Lote 3 · un invisible NO detectado no puede ser objetivo DIRECTO de ninguna
+    // torre (los efectos de ÁREA sí lo tocan: ver explode/línea perforante/auras).
+    if (e.invisible && !e.detected) continue;
     const edef = ENEMIES[e.type];
     if (edef.flying && !canAir) continue;
     if (!edef.flying && !canGround) continue;
@@ -374,21 +447,8 @@ function isBanner(lvl: { auraDamage?: number; auraHaste?: number }): boolean {
   return lvl.auraDamage !== undefined || lvl.auraHaste !== undefined;
 }
 
-// ¿Esta torre DISPARA? No disparan: la mina, la Escarcha Eterna, el Estandarte,
-// el Alquimista ni las torres de camino (Trampa/Barril). EXCEPCIÓN: el Señor de
-// la Guerra (`alsoFires`) tiene aura Y ADEMÁS dispara. La usan fireTower y el
-// Zapador (aturdir una torre que no dispara no hace nada, así que las ignora).
-function towerFires(tower: TowerState): boolean {
-  const lvl = statsOf(tower);
-  if (lvl.alsoFires) return true;
-  return !(
-    lvl.incomePerWave ||
-    lvl.slowAura ||
-    isBanner(lvl) ||
-    lvl.auraBounty !== undefined ||
-    TOWERS[tower.type].onPathOnly
-  );
-}
+// ¿Esta torre DISPARA? — ahora vive en balance/fusions.ts (Lote 4: la comparten
+// fireTower, el Zapador, la validación de focus/halt en commands.ts y el cliente).
 
 // Calcula, por cada torre buffeada, el MEJOR aura de daño y de cadencia de todos
 // los Estandartes que la cubren (de CUALQUIER dueño, co-op). No se apila: se toma
@@ -513,6 +573,19 @@ function fireTower(
     for (let i = 0; i < chain.targets && current; i++) {
       hitIds.add(current.id);
       pts.push([current.x, current.y]);
+      // Tempestad Tóxica (issue #7): una cadena con `poison` ENVENENA a cada eslabón
+      // por el que salta (mismo criterio que applyPayload: es MAGIA, así que los
+      // inmunes quedan exentos). Se aplica antes del daño, como el resto del veneno,
+      // y atribuye su fuente a esta torre (poisonSrc) para el crédito de asistencia
+      // y la Piedra Filosofal. Ningún Tesla base tiene `poison`, así que esto solo
+      // se activa en la Tempestad Tóxica.
+      if (lvl.poison && !current.spellImmune) {
+        if (lvl.poison.dps >= current.poisonDps) {
+          current.poisonDps = lvl.poison.dps;
+          current.poisonSrc = tower.id;
+        }
+        current.poisonUntil = Math.max(current.poisonUntil, state.tick + Math.round(lvl.poison.duration * TICK_RATE));
+      }
       // el rayo Tesla es mágico: los inmunes reciben −70% (execute ya se ignora en damageEnemy)
       let linkDmg = current.spellImmune ? Math.max(1, Math.round(dmg * SPELL_IMMUNE_TESLA_MULT)) : dmg;
       if (ENEMIES[current.type].flying && airBonus > 1) linkDmg = Math.round(linkDmg * airBonus);
@@ -524,6 +597,7 @@ function fireTower(
       for (let bi = 0; bi < chainN; bi++) {
         const e = state.enemies[bi];
         if (e.hp <= 0 || hitIds.has(e.id)) continue;
+        if (e.invisible && !e.detected) continue; // el rayo no salta a un invisible no detectado
         const edef = ENEMIES[e.type];
         if (edef.flying && !canAir) continue;
         const d = dist(current.x, current.y, e.x, e.y);
@@ -548,6 +622,11 @@ function fireTower(
       exclude.add(t.id);
       targets.push(t);
     }
+    // RÁFAGA COMPLETA: si hay menos enemigos a tiro que disparos, los sobrantes
+    // se reparten entre los objetivos ya elegidos (round-robin). Un Bombardeo de
+    // 4 bombas lanza SIEMPRE sus 4 bombas aunque solo quede un enemigo.
+    const distinct = targets.length;
+    for (let i = 0; targets.length < shots; i++) targets.push(targets[i % distinct]);
   }
 
   if (projectileKind === 'snipe') {
@@ -754,9 +833,13 @@ function stepEnemies(state: GameState, ctx: SimContext, events: GameEvent[]): vo
       enemy.hp -= enemy.poisonDps / TICK_RATE;
       const tower = state.towers.find((t) => t.id === enemy.poisonSrc);
       if (tower) {
-        tower.damage += enemy.poisonDps / TICK_RATE;
+        const tick = enemy.poisonDps / TICK_RATE;
+        tower.damage += tick;
         const owner = state.players.find((p) => p.id === tower.owner);
-        if (owner) owner.stats.damage += enemy.poisonDps / TICK_RATE;
+        if (owner) {
+          owner.stats.damage += tick;
+          creditDamage(enemy, owner.id, tick); // el DoT también da crédito de asistencia a su dueño
+        }
       }
       if (enemy.hp <= 0) {
         // baja por DoT: viaPoison=true (la Piedra Filosofal paga botín ×2 por estas)
@@ -930,6 +1013,7 @@ function stepWaves(state: GameState, ctx: SimContext, events: GameEvent[]): void
       state.nextWaveImmune = gen.immune;
       state.nextWaveBlessed = gen.blessed;
       state.nextWaveFlying = gen.flying;
+      state.nextWaveInvisible = gen.invisible;
       state.nextWaveBoss = gen.bossType;
     }
     state.interludeLeft -= 1;
@@ -951,6 +1035,7 @@ function stepWaves(state: GameState, ctx: SimContext, events: GameEvent[]): void
       state.nextWaveImmune = false;
       state.nextWaveBlessed = false;
       state.nextWaveFlying = false;
+      state.nextWaveInvisible = false;
       state.nextWaveBoss = null;
     }
     return;
@@ -971,6 +1056,8 @@ function stepWaves(state: GameState, ctx: SimContext, events: GameEvent[]): void
       if (entry.blessed && entry.blessedAffix && !ENEMIES[entry.type].boss) {
         makeBlessed(enemy, entry.blessedAffix);
       }
+      // Lote 3 · oleada invisible: los no-jefe nacen invisibles (un Sentry los revela)
+      if (entry.invisible && !ENEMIES[entry.type].boss) enemy.invisible = true;
       state.spawnCooldown = state.spawnQueue.length > 0 ? state.spawnQueue[0].delay : 0;
     }
   }
@@ -1027,6 +1114,10 @@ function stepTowers(state: GameState, ctx: SimContext, events: GameEvent[], aura
   for (const tower of state.towers) {
     // torre ATURDIDA (Zapador / Behemot): no dispara mientras dure el aturdimiento.
     if (tower.stunnedUntil > state.tick) continue;
+    // Lote 4 · torre DETENIDA (comando halt): no dispara hasta que la reanuden.
+    // Mismo gate que el aturdimiento: tampoco consume cooldown (al reanudar,
+    // retoma el enfriamiento donde lo dejó — coherente con stunned).
+    if (tower.halted) continue;
     if (tower.cooldownLeft > 0) {
       tower.cooldownLeft -= 1;
       continue;
@@ -1138,6 +1229,26 @@ function stepTowerAuras(state: GameState): void {
   }
 }
 
+// Lote 3 · DETECCIÓN de invisibles (recalculada CADA tick en la sim, determinista):
+// un invisible que entra en el radio (= `range`) de algún SENTRY del equipo (torres
+// con `detects`) queda `detected` y REVELADO el resto de su recorrido (detección
+// PEGAJOSA, estilo Green TD: basta un Sentry en el camino para revelar la oleada;
+// caminos largos no exigen cobertura total). Determinista: sin RNG ni reloj, orden
+// estable de `state.towers`/`state.enemies`. Se corre tras mover a los enemigos y
+// antes de que las torres apunten, para que `pickTarget` lea la detección de este tick.
+function recomputeDetection(state: GameState): void {
+  for (const t of state.towers) {
+    if (!TOWERS[t.type].detects) continue;
+    const radius = statsOf(t).range;
+    const tx = t.cx + 0.5;
+    const ty = t.cy + 0.5;
+    for (const e of state.enemies) {
+      if (!e.invisible || e.detected) continue; // ya revelado: sigue revelado (pegajoso)
+      if (dist(tx, ty, e.x, e.y) <= radius) e.detected = true;
+    }
+  }
+}
+
 // Avanza un tick de la simulación. Muta `state` y devuelve los eventos del tick.
 export function stepGame(
   state: GameState,
@@ -1154,7 +1265,7 @@ export function stepGame(
   if (state.tick === 0 && state.mode !== 'horde') {
     events.push({
       e: 'sys',
-      msg: '🛡 Las oleadas múltiplos de 5 (desde la 10) son INMUNES a la magia: ten daño físico de reserva. ☠ Los jefes llegan cada 10 (la Quimera voladora en la 15/25/35).',
+      msg: '🛡 Las oleadas múltiplos de 5 (desde la 10) son INMUNES a la magia: ten daño físico de reserva. ☠ Los jefes llegan cada 10 (la Quimera voladora en la 15/25/35). 👁 Algunas oleadas son INVISIBLES: compra un Sentry en la 🛒 Tienda para revelarlas.',
     });
   }
   if (state.tick === 0) {
@@ -1173,6 +1284,9 @@ export function stepGame(
   stepWaves(state, ctx, events);
   stepTowerAuras(state);
   stepEnemies(state, ctx, events);
+  // Lote 3 · detección de invisibles por los Sentry: se recalcula tras el movimiento
+  // y ANTES de que las torres apunten (stepTowers), para que pickTarget lea `detected`.
+  recomputeDetection(state);
   // Trampas de púas: golpean a los enemigos que pisan su celda y consumen carga.
   stepTraps(state, ctx, events);
   // refuerzo de los Estandartes: se calcula una vez por tick (solo lee el estado)

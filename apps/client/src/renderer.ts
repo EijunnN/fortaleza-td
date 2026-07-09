@@ -56,6 +56,8 @@ export const TOWER_ICONS: Record<TowerTypeId, string> = {
   alchemist: '⚗️',
   // F4.4
   boom: '💥',
+  // Lote 3
+  sentry: '👁',
 };
 
 export const ENEMY_ICONS: Record<EnemyTypeId, string> = {
@@ -235,19 +237,26 @@ export function panBy(dx: number, dy: number): void {
   view.oy += dy;
 }
 
-// Cámara inicial estilo Green TD: NO se muestra todo el mapa de golpe — se
-// arranca ACERCADO (×1.6) sobre la entrada de los enemigos, que es donde se
+// Cámara inicial estilo Green TD: en TÁCTIL no se muestra todo el mapa de golpe
+// — se arranca ACERCADO (×1.6) sobre la entrada de los enemigos, que es donde se
 // construye al principio. El resto del mapa se explora paneando, con pellizco/
 // rueda (el zoom mínimo sigue mostrando el mapa entero) o con el minimapa, que
 // así recupera su razón de ser. El doble tap vuelve a ESTA vista.
+//
+// En ESCRITORIO (ratón con hover fino) este arranque acercado resultó ser mala
+// UX real (issue: "siempre que entro por desktop hay que hacer antizoom"): el
+// jugador tenía que alejar el zoom a mano en CADA partida para ver el tablero
+// completo. Ahí el reset muestra el mapa entero de una vez (zoom 1 = el fit
+// calculado en computeView), que es exactamente lo que el jugador quería.
 const START_ZOOM = 1.6;
+const HAS_HOVER = window.matchMedia('(hover: hover) and (pointer: fine)').matches;
 // centro pendiente de aplicar: computeView lo consume cuando ya conoce el
 // baseScale real del frame (aplicarlo aquí usaría una escala desfasada)
 let pendingCenter: { x: number; y: number } | null = null;
 
 export function resetCamera(): void {
   const gs = store.game;
-  if (!gs) {
+  if (!gs || HAS_HOVER) {
     zoom = 1;
     panX = 0;
     panY = 0;
@@ -1363,7 +1372,19 @@ function drawTowers(gs: GameStore, interp: InterpResult | null, now: number, dt:
   const auras = computeBannerAuras(snap);
   const s = view.scale;
   const t = now / 1000;
-  const selected = gs.selection?.kind === 'tower' ? gs.selection.id : -1;
+  // Lote 4 · la selección puede ser UNA torre o un GRUPO (doble click): todas
+  // llevan el glow. Con grupos grandes el círculo de alcance se pinta TENUE
+  // (solo contorno) para no embarrar el tablero con N discos superpuestos.
+  const selSet = new Set<number>();
+  if (gs.selection?.kind === 'tower') selSet.add(gs.selection.id);
+  else if (gs.selection?.kind === 'towers') for (const sid of gs.selection.ids) selSet.add(sid);
+  const faintRange = selSet.size > 3;
+  // posiciones interpoladas por id (vínculo 🎯 de las torres con focus seleccionadas)
+  let interpById: Map<number, InterpResult['enemies'][number]> | null = null;
+  if (selSet.size > 0 && interp) {
+    interpById = new Map();
+    for (const e of interp.enemies) interpById.set(e.id, e);
+  }
   const alive = new Set<number>();
 
   for (const tw of snap.towers) {
@@ -1391,7 +1412,7 @@ function drawTowers(gs: GameStore, interp: InterpResult | null, now: number, dt:
 
     // aura pasiva (Escarcha Eterna): solo visible con la torre SELECCIONADA
     // (como el círculo de alcance de las demás torres)
-    if (lvl.slowAura && id === selected) {
+    if (lvl.slowAura && selSet.has(id)) {
       const pulse = 0.5 + Math.sin(t * 2.4) * 0.12;
       g.fillStyle = `rgba(79,195,247,${0.07 + pulse * 0.05})`;
       g.strokeStyle = `rgba(129,212,250,${0.4 + pulse * 0.2})`;
@@ -1404,7 +1425,7 @@ function drawTowers(gs: GameStore, interp: InterpResult | null, now: number, dt:
 
     // aura del Alquimista: anillo verde en el suelo (como el dorado del Estandarte).
     // solo visible con la torre SELECCIONADA.
-    if (lvl.auraBounty !== undefined && lvl.auraBounty > 0 && id === selected) {
+    if (lvl.auraBounty !== undefined && lvl.auraBounty > 0 && selSet.has(id)) {
       const pulse = 0.5 + Math.sin(t * 2.4) * 0.12;
       g.fillStyle = `rgba(76,175,80,${0.05 + pulse * 0.05})`;
       g.strokeStyle = `rgba(129,199,132,${0.4 + pulse * 0.2})`;
@@ -1419,7 +1440,7 @@ function drawTowers(gs: GameStore, interp: InterpResult | null, now: number, dt:
 
     // aura del Estandarte: anillo cálido en el suelo, solo visible con la torre
     // SELECCIONADA. El tono vira a celeste si el aura es de celeridad (hastebanner).
-    if ((lvl.auraDamage !== undefined || lvl.auraHaste !== undefined) && id === selected) {
+    if ((lvl.auraDamage !== undefined || lvl.auraHaste !== undefined) && selSet.has(id)) {
       const pulse = 0.5 + Math.sin(t * 2.4) * 0.12;
       const haste = (lvl.auraHaste ?? 0) > 0;
       const fill = haste ? `rgba(79,195,247,${0.05 + pulse * 0.05})` : `rgba(255,202,40,${0.05 + pulse * 0.05})`;
@@ -1453,21 +1474,74 @@ function drawTowers(gs: GameStore, interp: InterpResult | null, now: number, dt:
       }
     }
 
-    // rango de la torre seleccionada (la Gran Bertha alcanza TODO el mapa:
-    // se omite el círculo, que taparía el mapa entero)
-    if (id === selected && lvl.range < 90) {
-      const pulse = 0.5 + Math.sin(t * 4) * 0.08;
-      g.fillStyle = 'rgba(255,255,255,0.07)';
-      g.strokeStyle = `rgba(255,213,79,${pulse})`;
+    // Lote 3 · Sentry: radio de DETECCIÓN (azul, discontinuo) solo al SELECCIONARLO,
+    // como las auras. Reemplaza el círculo de alcance dorado genérico para el Sentry.
+    if (TOWERS[type].detects && selSet.has(id)) {
+      const pulse = 0.5 + Math.sin(t * 2.4) * 0.12;
+      g.fillStyle = `rgba(41,182,246,${0.05 + pulse * 0.05})`;
+      g.strokeStyle = `rgba(129,212,250,${0.45 + pulse * 0.25})`;
       g.lineWidth = 1.5;
+      g.setLineDash([s * 0.18, s * 0.12]);
       g.beginPath();
       g.arc(toX(cx + 0.5), toY(cy + 0.5), lvl.range * s, 0, Math.PI * 2);
       g.fill();
       g.stroke();
-      if (lvl.minRange) {
+      g.setLineDash([]);
+    }
+
+    // rango de la torre seleccionada (la Gran Bertha alcanza TODO el mapa:
+    // se omite el círculo, que taparía el mapa entero; el Sentry usa su propio anillo).
+    // Lote 4 · en un GRUPO grande (>3) el círculo va TENUE y sin relleno: se sigue
+    // leyendo la cobertura sin apilar N discos blancos encima del tablero.
+    if (selSet.has(id) && lvl.range < 90 && !TOWERS[type].detects) {
+      const pulse = 0.5 + Math.sin(t * 4) * 0.08;
+      g.strokeStyle = faintRange ? 'rgba(255,213,79,0.22)' : `rgba(255,213,79,${pulse})`;
+      g.lineWidth = 1.5;
+      g.beginPath();
+      g.arc(toX(cx + 0.5), toY(cy + 0.5), lvl.range * s, 0, Math.PI * 2);
+      if (!faintRange) {
+        g.fillStyle = 'rgba(255,255,255,0.07)';
+        g.fill();
+      }
+      g.stroke();
+      if (lvl.minRange && !faintRange) {
         g.strokeStyle = 'rgba(240,100,100,0.45)';
         g.beginPath();
         g.arc(toX(cx + 0.5), toY(cy + 0.5), lvl.minRange * s, 0, Math.PI * 2);
+        g.stroke();
+      }
+    }
+
+    // Lote 4 · vínculo de FOCUS: torre SELECCIONADA con objetivo fijado → línea
+    // punteada sutil hasta la posición interpolada del enemigo + retícula pequeña.
+    const focusId = tw[18] ?? 0;
+    if (selSet.has(id) && focusId > 0 && interpById) {
+      const fe = interpById.get(focusId);
+      if (fe) {
+        const ex = toX(fe.x);
+        const ey = toY(fe.y);
+        const pulse = 0.45 + Math.sin(t * 5 + id) * 0.2;
+        g.strokeStyle = `rgba(255,110,90,${pulse})`;
+        g.lineWidth = Math.max(1, s * 0.04);
+        g.setLineDash([s * 0.22, s * 0.16]);
+        g.beginPath();
+        g.moveTo(toX(cx + 0.5), toY(cy + 0.5));
+        g.lineTo(ex, ey);
+        g.stroke();
+        g.setLineDash([]);
+        // retícula sobre el enemigo enfocado
+        g.beginPath();
+        g.arc(ex, ey, s * 0.32, 0, Math.PI * 2);
+        g.stroke();
+        g.beginPath();
+        g.moveTo(ex - s * 0.44, ey);
+        g.lineTo(ex - s * 0.24, ey);
+        g.moveTo(ex + s * 0.24, ey);
+        g.lineTo(ex + s * 0.44, ey);
+        g.moveTo(ex, ey - s * 0.44);
+        g.lineTo(ex, ey - s * 0.24);
+        g.moveTo(ex, ey + s * 0.24);
+        g.lineTo(ex, ey + s * 0.44);
         g.stroke();
       }
     }
@@ -1497,7 +1571,7 @@ function drawTowers(gs: GameStore, interp: InterpResult | null, now: number, dt:
       g.fill();
       g.stroke();
       g.restore();
-      if (id === selected) {
+      if (selSet.has(id)) {
         g.shadowColor = 'rgba(255,213,79,0.85)';
         g.shadowBlur = s * 0.28;
       }
@@ -1505,7 +1579,7 @@ function drawTowers(gs: GameStore, interp: InterpResult | null, now: number, dt:
       g.drawImage(sprite, -w / 2 - rx, s * 0.5 - h - ry, w, h);
       g.shadowBlur = 0;
     } else {
-      drawTowerArt(type, s, level, t, anim, owner?.color ?? '#888', id === selected, spec, fusionIdx);
+      drawTowerArt(type, s, level, t, anim, owner?.color ?? '#888', selSet.has(id), spec, fusionIdx);
     }
     // Trampa de púas: contador de cargas restantes + barra de desgaste bajo la placa.
     const charges = tw[11] ?? 0;
@@ -1529,6 +1603,31 @@ function drawTowers(gs: GameStore, interp: InterpResult | null, now: number, dt:
       g.lineWidth = 3;
       g.strokeText(String(charges), 0, -s * 0.3);
       g.fillText(String(charges), 0, -s * 0.3);
+    }
+    // Lote 4 · DETENIDA (⏸ por su dueño): badge de pausa flotando sobre la torre
+    // + tinte gris suave, visible para TODOS (comunica por qué no dispara).
+    const halted = (tw[17] ?? 0) === 1;
+    if (halted) {
+      g.fillStyle = 'rgba(90,100,120,0.30)';
+      g.beginPath();
+      g.arc(0, 0, s * 0.4, 0, Math.PI * 2);
+      g.fill();
+      const bob = Math.sin(t * 2 + id) * s * 0.03;
+      const by = -s * 0.58 + bob;
+      const br = s * 0.17;
+      g.fillStyle = 'rgba(8,12,20,0.85)';
+      g.beginPath();
+      g.arc(0, by, br, 0, Math.PI * 2);
+      g.fill();
+      g.strokeStyle = 'rgba(255,213,79,0.9)';
+      g.lineWidth = Math.max(1, s * 0.03);
+      g.stroke();
+      // las dos barras del ⏸
+      g.fillStyle = '#ffd54f';
+      const bw = br * 0.26;
+      const bh = br * 0.95;
+      g.fillRect(-bw * 1.4, by - bh / 2, bw, bh);
+      g.fillRect(bw * 0.4, by - bh / 2, bw, bh);
     }
     // ATURDIDA (Zapador / Behemot): estrellitas girando sobre la torre + tinte gris
     const stunned = (tw[10] ?? 0) === 1;
@@ -2037,6 +2136,59 @@ function drawTowerArt(
       g.fill();
       break;
     }
+    case 'sentry': {
+      // Lote 3 · OJO azul brillante sobre un pequeño trípode: esfera con iris
+      // celeste, glow y parpadeo sutil. El radio de detección lo pinta drawTowers
+      // (solo al seleccionar), como las auras.
+      // trípode / poste
+      g.strokeStyle = '#455a64';
+      g.lineWidth = Math.max(1.5, s * 0.05);
+      g.lineCap = 'round';
+      for (const dx of [-s * 0.14, 0, s * 0.14]) {
+        g.beginPath();
+        g.moveTo(0, s * 0.02);
+        g.lineTo(dx, s * 0.3);
+        g.stroke();
+      }
+      // parpadeo: cada ~3.3 s el ojo se cierra un instante
+      const blink = (t % 3.3) < 0.12 ? 0.12 : 1;
+      const eyeR = s * 0.26;
+      // glow celeste
+      const glow = g.createRadialGradient(0, -s * 0.06, eyeR * 0.3, 0, -s * 0.06, eyeR * 1.9);
+      glow.addColorStop(0, 'rgba(79,195,247,0.55)');
+      glow.addColorStop(1, 'rgba(79,195,247,0)');
+      g.fillStyle = glow;
+      g.beginPath();
+      g.arc(0, -s * 0.06, eyeR * 1.9, 0, Math.PI * 2);
+      g.fill();
+      // esclerótica (globo del ojo)
+      g.fillStyle = '#e3f2fd';
+      g.beginPath();
+      g.ellipse(0, -s * 0.06, eyeR, eyeR * blink, 0, 0, Math.PI * 2);
+      g.fill();
+      g.strokeStyle = '#0277bd';
+      g.lineWidth = Math.max(1, s * 0.03);
+      g.stroke();
+      if (blink > 0.5) {
+        // iris celeste
+        g.fillStyle = '#29b6f6';
+        g.beginPath();
+        g.arc(0, -s * 0.06, eyeR * 0.55, 0, Math.PI * 2);
+        g.fill();
+        // pupila
+        g.fillStyle = '#01579b';
+        g.beginPath();
+        g.arc(0, -s * 0.06, eyeR * 0.28, 0, Math.PI * 2);
+        g.fill();
+        // destello
+        const spark = 0.6 + Math.sin(t * 3) * 0.4;
+        g.fillStyle = `rgba(255,255,255,${spark})`;
+        g.beginPath();
+        g.arc(-eyeR * 0.2, -s * 0.06 - eyeR * 0.2, eyeR * 0.16, 0, Math.PI * 2);
+        g.fill();
+      }
+      break;
+    }
   }
   void def;
 
@@ -2315,6 +2467,168 @@ function drawFusionArt(
       void ownerColor;
       break;
     }
+
+    // ---------- issue #7 · arte de las 5 recetas nuevas ----------
+    case 'toxicstorm': {
+      // bobina Tesla con núcleo palpitante y arcos VERDES tóxicos irradiando
+      g.fillStyle = '#33421f';
+      roundRect(g, -s * 0.16, -s * 0.02, s * 0.32, s * 0.2, s * 0.05);
+      g.fill();
+      const core = 0.6 + Math.sin(t * 6) * 0.4;
+      g.fillStyle = `rgba(174,213,129,${0.5 + core * 0.5})`;
+      g.beginPath();
+      g.arc(0, -s * 0.08, s * 0.12 * grow, 0, Math.PI * 2);
+      g.fill();
+      g.strokeStyle = `rgba(124,179,66,${core})`;
+      g.lineWidth = Math.max(1, s * 0.03);
+      g.stroke();
+      g.strokeStyle = `rgba(197,225,165,${0.5 + Math.sin(t * 20) * 0.4})`;
+      g.lineWidth = Math.max(1, s * 0.025);
+      for (let k = 0; k < 4; k++) {
+        const base = t * 1.2 + (k * Math.PI * 2) / 4;
+        g.beginPath();
+        g.moveTo(Math.cos(base) * s * 0.12, -s * 0.08 + Math.sin(base) * s * 0.12);
+        for (let j = 1; j <= 3; j++) {
+          const rr = s * (0.12 + j * 0.1);
+          const jit = (j % 2 === 0 ? 1 : -1) * s * 0.05;
+          g.lineTo(Math.cos(base) * rr - Math.sin(base) * jit, -s * 0.08 + Math.sin(base) * rr + Math.cos(base) * jit);
+        }
+        g.stroke();
+      }
+      break;
+    }
+    case 'shredder': {
+      // autocañón de metralla: tres cañones cortos en abanico con bocas naranjas
+      g.save();
+      g.rotate(a);
+      g.translate(-rec, 0);
+      g.fillStyle = '#3e2723';
+      roundRect(g, -s * 0.12, -s * 0.13, s * 0.2, s * 0.26, s * 0.05);
+      g.fill();
+      g.strokeStyle = '#8d6e63';
+      g.lineWidth = Math.max(1.5, s * 0.05);
+      g.lineCap = 'round';
+      for (const off of [-0.11, 0, 0.11]) {
+        g.beginPath();
+        g.moveTo(s * 0.02, s * off);
+        g.lineTo(s * 0.34 * grow, s * off);
+        g.stroke();
+      }
+      g.fillStyle = '#ff8f00';
+      for (const off of [-0.11, 0, 0.11]) {
+        g.beginPath();
+        g.arc(s * 0.34 * grow, s * off, s * 0.04, 0, Math.PI * 2);
+        g.fill();
+      }
+      g.restore();
+      break;
+    }
+    case 'siegeeye': {
+      // cañón largo de precisión + retícula de "ojo" que todo lo ve
+      g.save();
+      g.rotate(a);
+      g.translate(-rec, 0);
+      g.fillStyle = '#263238';
+      roundRect(g, -s * 0.1, -s * 0.055, s * 0.55 * grow, s * 0.11, s * 0.04);
+      g.fill();
+      g.strokeStyle = '#607d8b';
+      g.lineWidth = Math.max(1, s * 0.025);
+      g.stroke();
+      g.fillStyle = '#10161a';
+      g.beginPath();
+      g.arc(s * 0.45 * grow, 0, s * 0.05, 0, Math.PI * 2);
+      g.fill();
+      g.restore();
+      // retícula fija sobre la torre (no rota con el cañón)
+      g.strokeStyle = '#cfd8dc';
+      g.lineWidth = Math.max(1, s * 0.025);
+      g.beginPath();
+      g.arc(0, -s * 0.02, s * 0.14 * grow, 0, Math.PI * 2);
+      g.stroke();
+      const iris = 0.5 + Math.sin(t * 2) * 0.5;
+      g.fillStyle = `rgba(144,164,174,${0.6 + iris * 0.4})`;
+      g.beginPath();
+      g.arc(0, -s * 0.02, s * 0.05, 0, Math.PI * 2);
+      g.fill();
+      g.strokeStyle = 'rgba(255,255,255,0.6)';
+      g.lineWidth = Math.max(1, s * 0.015);
+      g.beginPath();
+      g.moveTo(-s * 0.14, -s * 0.02);
+      g.lineTo(s * 0.14, -s * 0.02);
+      g.moveTo(0, -s * 0.16);
+      g.lineTo(0, s * 0.12);
+      g.stroke();
+      break;
+    }
+    case 'alchemyvault': {
+      // cofre/bóveda dorada con matraz alquímico y monedas subiendo (no dispara)
+      g.fillStyle = '#5d4037';
+      roundRect(g, -s * 0.22, -s * 0.02, s * 0.44, s * 0.24, s * 0.05);
+      g.fill();
+      g.fillStyle = '#ffd54f';
+      roundRect(g, -s * 0.22, -s * 0.02, s * 0.44, s * 0.08, s * 0.03);
+      g.fill();
+      g.fillStyle = '#8d6e63';
+      g.beginPath();
+      g.arc(0, s * 0.07, s * 0.04, 0, Math.PI * 2);
+      g.fill();
+      // matraz burbujeante encima de la tapa
+      g.strokeStyle = '#a5d6a7';
+      g.fillStyle = 'rgba(129,199,132,0.4)';
+      g.lineWidth = Math.max(1, s * 0.025);
+      g.beginPath();
+      g.moveTo(-s * 0.05, -s * 0.2 * grow);
+      g.lineTo(-s * 0.05, -s * 0.08);
+      g.lineTo(-s * 0.12, -s * 0.02);
+      g.lineTo(s * 0.12, -s * 0.02);
+      g.lineTo(s * 0.05, -s * 0.08);
+      g.lineTo(s * 0.05, -s * 0.2 * grow);
+      g.closePath();
+      g.fill();
+      g.stroke();
+      for (let i = 0; i < 3; i++) {
+        const ph = (t * (0.6 + i * 0.2) + i * 0.4) % 1;
+        g.fillStyle = `rgba(255,213,79,${1 - ph})`;
+        g.beginPath();
+        g.arc((i - 1) * s * 0.13, -s * 0.22 * grow - ph * s * 0.2, s * 0.035, 0, Math.PI * 2);
+        g.fill();
+      }
+      break;
+    }
+    case 'icelance': {
+      // lanza de cristal helado larga con punta gélida + copos (dispara)
+      g.save();
+      g.rotate(a);
+      g.translate(-rec, 0);
+      g.fillStyle = 'rgba(77,208,225,0.85)';
+      g.strokeStyle = '#e0f7fa';
+      g.lineWidth = Math.max(1, s * 0.02);
+      g.beginPath();
+      g.moveTo(-s * 0.1, -s * 0.05);
+      g.lineTo(s * 0.34 * grow, -s * 0.03);
+      g.lineTo(s * 0.48 * grow, 0);
+      g.lineTo(s * 0.34 * grow, s * 0.03);
+      g.lineTo(-s * 0.1, s * 0.05);
+      g.closePath();
+      g.fill();
+      g.stroke();
+      g.strokeStyle = 'rgba(255,255,255,0.8)';
+      g.lineWidth = Math.max(1, s * 0.015);
+      g.beginPath();
+      g.moveTo(0, 0);
+      g.lineTo(s * 0.4 * grow, 0);
+      g.stroke();
+      g.restore();
+      g.fillStyle = '#b3e5fc';
+      g.font = `${Math.max(6, s * 0.13)}px serif`;
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      for (let i = 0; i < 2; i++) {
+        const ang = t * 1.6 + i * Math.PI;
+        g.fillText('❄', Math.cos(ang) * s * 0.3, Math.sin(ang) * s * 0.18 - s * 0.14);
+      }
+      break;
+    }
   }
 }
 
@@ -2484,12 +2798,20 @@ function drawEnemies(interp: InterpResult, now: number): void {
   let boss: { hpFrac: number; name: string } | null = null;
 
   for (const e of interp.enemies) {
+    // Lote 3 · INVISIBLE no detectado: NO se dibuja NADA (ni sombra ni barra de
+    // vida) — desaparece de verdad, para que el Sentry importe. Detectado: se pinta
+    // semitransparente con un shimmer (más abajo).
+    const isInvisible = (e.flags & 64) !== 0;
+    const isDetected = (e.flags & 128) !== 0;
+    if (isInvisible && !isDetected) continue;
+    const stealth = isInvisible && isDetected;
     const type = ENEMY_ORDER[e.typeIdx];
     const def = ENEMIES[type];
     const isBoss = (e.flags & 4) !== 0;
     const isElite = (e.flags & 8) !== 0;
     const isImmune = (e.flags & 16) !== 0;
     const affixes = isElite ? affixesFromMask(e.affix) : [];
+    if (stealth) g.globalAlpha = 0.5;
     const x = toX(e.x);
     let y = toY(e.y);
     const r = Math.max(4, def.radius * s * (isElite ? 1.3 : 1));
@@ -2519,6 +2841,19 @@ function drawEnemies(interp: InterpResult, now: number): void {
     g.save();
     g.translate(x, y);
     drawEnemyArt(type, def.color, r, t, e.id, bob, s);
+
+    // Lote 3 · DETECTADO (invisible revelado por un Sentry): shimmer sutil —
+    // anillo celeste discontinuo que gira, para leer "esto solo lo ves por el Sentry".
+    if (stealth) {
+      const shim = 0.45 + Math.sin(t * 6 + e.id) * 0.3;
+      g.strokeStyle = `rgba(120,200,255,${shim})`;
+      g.lineWidth = Math.max(1, r * 0.1);
+      g.setLineDash([r * 0.3, r * 0.3]);
+      g.beginPath();
+      g.arc(0, 0, r * 1.12, t + e.id, t + e.id + Math.PI * 2);
+      g.stroke();
+      g.setLineDash([]);
+    }
 
     // INMUNE a magia: tinte azulado + escudo runado giratorio. Marca visual clara
     // de que hielo/veneno/execute/tesla no le hacen mella (solo daño físico).
@@ -2627,8 +2962,10 @@ function drawEnemies(interp: InterpResult, now: number): void {
     if (isBoss && (!boss || e.hpFrac > boss.hpFrac)) {
       boss = { hpFrac: e.hpFrac, name: def.name };
     }
+    if (stealth) g.globalAlpha = 1; // restablecer antes del siguiente enemigo
   }
 
+  g.globalAlpha = 1;
   if (boss) drawBossBar(boss);
 }
 
@@ -3588,6 +3925,8 @@ function drawMiniMap(gs: GameStore, now: number): void {
     }
     // enemigos: rojo normal, morado si élite (flag 8)
     for (const e of snap.enemies) {
+      // Lote 3 · invisible no detectado: tampoco en el minimapa (solo los detectados)
+      if ((e[5] & 64) !== 0 && (e[5] & 128) === 0) continue;
       const elite = (e[5] & 8) !== 0;
       g.fillStyle = elite ? '#c77dff' : '#ff5252';
       g.beginPath();

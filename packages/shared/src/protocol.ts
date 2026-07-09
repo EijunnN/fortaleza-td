@@ -62,9 +62,10 @@ export interface PublicRoomInfo {
 // ---------- Snapshot compacto (arrays para ahorrar bytes) ----------
 
 // enemigo: [id, typeIdx, x, y, hpFrac, flags, affixMask]
-//   flags: 1=slow 2=poison 4=boss 8=elite 16=inmune 32=shred   affixMask: bits de balance/affixes
+//   flags: 1=slow 2=poison 4=boss 8=elite 16=inmune 32=shred 64=invisible 128=detectado
+//   (bits nuevos AL FINAL; afijos aparte)   affixMask: bits de balance/affixes
 export type SnapEnemy = [number, number, number, number, number, number, number];
-// torre: [id, typeIdx, cx, cy, level, ownerIdx, targetModeIdx, kills, damage, spec, stunned, charges, growth, fusion, invested, goldGen, cd]
+// torre: [id, typeIdx, cx, cy, level, ownerIdx, targetModeIdx, kills, damage, spec, stunned, charges, growth, fusion, invested, goldGen, cd, halted, focusId]
 //   spec: -1 sin especializar, 0/1 rama; stunned: 0/1; charges: Trampa (0 = N/A);
 //   growth: bono de crecimiento permanente (Arco Largo/Explorador II; 0 = N/A);
 //   fusion: índice en FUSION_ORDER (−1 = sin fusión); invested: oro invertido total
@@ -72,10 +73,13 @@ export type SnapEnemy = [number, number, number, number, number, number, number]
 //   no puede reconstruirse desde type/level/spec);
 //   goldGen: oro EXTRA que el aura del Alquimista añadió a los botines (F5.3);
 //   cd: ticks que le faltan a la torre para su PRÓXIMO disparo (0 = lista). El panel
-//   lo muestra como contador de cadencia; las torres que no disparan lo ignoran (F6.2)
-//   (los campos F4.2 charges/growth, F4.3 fusion/invested, F5.3 goldGen y F6.2 cd van
-//   al FINAL para no romper índices previos)
-export type SnapTower = [number, number, number, number, number, number, number, number, number, number, number, number, number, number, number, number, number];
+//   lo muestra como contador de cadencia; las torres que no disparan lo ignoran (F6.2);
+//   halted: 0/1 — torre DETENIDA por su dueño (Lote 4; badge ⏸ + botón ⏹/▶);
+//   focusId: id del enemigo ENFOCADO (Lote 4; 0 = ninguno — pinta el vínculo 🎯
+//   al seleccionar y el estado del panel)
+//   (los campos F4.2 charges/growth, F4.3 fusion/invested, F5.3 goldGen, F6.2 cd y
+//   Lote 4 halted/focusId van al FINAL para no romper índices previos)
+export type SnapTower = [number, number, number, number, number, number, number, number, number, number, number, number, number, number, number, number, number, number, number];
 // proyectil: [id, kindIdx(0 bullet,1 shell,2 bomb), x, y, colorIdx(=typeIdx de torre)]
 export type SnapProj = [number, number, number, number, number];
 
@@ -97,10 +101,11 @@ export interface Snap {
   active: boolean; // false = interludio
   interludeSec: number;
   nextWave: [number, number][]; // [enemyTypeIdx, count]
-  // telegrafía de la PRÓXIMA oleada (durante el interludio): 🛡 inmune / ⭐ bendecida / 🦅 aérea / ☠ jefe
+  // telegrafía de la PRÓXIMA oleada (durante el interludio): 🛡 inmune / ⭐ bendecida / 🦅 aérea / 👁 invisible / ☠ jefe
   nextImmune: boolean;
   nextBlessed: boolean;
   nextFlying: boolean;
+  nextInvisible: boolean; // Lote 3 · la próxima oleada es INVISIBLE (necesitas un Sentry)
   nextBossType: number; // typeIdx del jefe de la próxima oleada, o -1
   players: SnapPlayer[];
   enemies: SnapEnemy[];
@@ -131,6 +136,7 @@ export function buildSnap(state: GameState): Snap {
     nextImmune: state.nextWaveImmune,
     nextBlessed: state.nextWaveBlessed,
     nextFlying: state.nextWaveFlying,
+    nextInvisible: state.nextWaveInvisible,
     nextBossType: state.nextWaveBoss ? (enemyTypeIdx.get(state.nextWaveBoss) ?? -1) : -1,
     players: state.players.map((p) => ({
       id: p.id,
@@ -150,6 +156,8 @@ export function buildSnap(state: GameState): Snap {
       if (e.elite) flags |= 8;
       if (e.spellImmune) flags |= 16;
       if (e.armorShredUntil > state.tick) flags |= 32; // shred de armadura activo
+      if (e.invisible) flags |= 64; // Lote 3 · invisible
+      if (e.detected) flags |= 128; // Lote 3 · detectado por un Sentry
       return [
         e.id,
         enemyTypeIdx.get(e.type) ?? 0,
@@ -183,6 +191,9 @@ export function buildSnap(state: GameState): Snap {
           // cooldown de la sim; no lo tocamos. El panel de torre lo pinta como
           // contador de cadencia (las torres de apoyo/camino no lo muestran).
           t.cooldownLeft,
+          // Lote 4 · detenida (⏸) + enemigo enfocado (0 = ninguno)
+          t.halted ? 1 : 0,
+          t.focusId,
         ] as SnapTower,
     ),
     projs: state.projectiles.map((p) => {
@@ -246,6 +257,13 @@ export type ClientMsg =
   // era `prevToken` en vez de degradarlo a espectador.
   | { type: 'join_room'; name: string; token: string; code: string; prevToken?: string }
   | { type: 'leave_room' }
+  // ABANDONO explícito de la partida (salir a mitad de juego). En el lobby / como
+  // espectador se comporta como `leave_room` (cierra el socket). DURANTE la partida
+  // marca al jugador como desconectado PERMANENTE: sus torres quedan en el tablero,
+  // su token de reconexión queda invalidado (si vuelve, entra de espectador) y el
+  // resto ve el aviso «💨 X abandonó la partida». Sin payload (el jugador se deduce
+  // del socket, igual que `leave_room`/`pause`/`resume`).
+  | { type: 'leave' }
   | { type: 'set_settings'; settings: RoomSettings }
   // el anfitrión expulsa a un jugador de la sala (solo en el lobby)
   | { type: 'kick_player'; playerId: string }

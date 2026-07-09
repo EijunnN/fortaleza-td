@@ -52,6 +52,16 @@ export const BLESSED_ODDS = 15;
 export const BLESSED_BOUNTY_MULT = 1.5;
 export const BLESSED_BONUS_MULT = 1.5;
 
+// ---------- Lote 3 · oleadas INVISIBLES (estilo Green TD) ----------
+// Cada INVISIBLE_EVERY oleadas desde INVISIBLE_FROM la oleada sale INVISIBLE: las
+// torres NO pueden apuntar a un enemigo invisible NO DETECTADO (ni verlo). Un
+// SENTRY del equipo (torre-item de la 🛒 Tienda) lo REVELA dentro de su radio.
+// Es DETERMINISTA por número de oleada (no consume RNG). Se exime cuando la oleada
+// coincide con INMUNE o con JEFE (mira isInvisibleWave en balance/waves.ts): así en
+// el clásico de 36 caen ~4 oleadas invisibles (12, 18, 24, 36) sin apilar castigos.
+export const INVISIBLE_FROM = 12;
+export const INVISIBLE_EVERY = 6;
+
 // ---------- F4.2 · torres nuevas + Rango II ----------
 // Trampa de púas: cargas iniciales (cada golpe consume 1; a 0 se auto-vende).
 export const TRAP_CHARGES = 20;
@@ -92,6 +102,18 @@ export const WOOD_PRICE_STEP = 1.08; // cada compra ×1.08; cada venta ÷1.08
 export const WOOD_SELL_SPREAD = 0.85; // la venta paga el 85% del precio
 export const WOOD_PRICE_REVERT = 0.05; // reversión hacia la base al fin de oleada
 
+// ---------- ORO DE ASISTENCIA (co-op) ----------
+// El matador se lleva su botín COMPLETO como siempre. ADEMÁS, si el MAYOR dañador de
+// un enemigo NO es quien dio el golpe final y le hizo suficiente daño, cobra un EXTRA
+// de "asistencia": recompensa al que hizo el trabajo sin llevarse la baja (issue #9).
+// - ASSIST_SHARE: fracción del botín FINAL que cobra el asistente (round, mín. 1). No
+//   sale del bolsillo del matador (es oro nuevo, como el botín).
+// - ASSIST_MIN_DMG_FRAC: umbral mínimo de daño acumulado (sobre el maxHp del enemigo)
+//   para que un dañador cuente como asistente — evita pagar por un roce. En solitario
+//   nunca dispara: el matador es siempre su propio mayor dañador.
+export const ASSIST_SHARE = 0.25;
+export const ASSIST_MIN_DMG_FRAC = 0.35;
+
 // oro de entrada para quien se une con la partida ya empezada
 export const midJoinGold = (wave: number) => 180 + wave * 22;
 
@@ -127,5 +149,8 @@ export const PLAYER_COLORS = [
   '#e57373', // rojo
 ];
 
-export const BALANCE_VERSION = 12; // F6.2: la Metralla hace bonus de daño a voladores (anti-Coloso)
+// 14: ráfaga completa del multidisparo · 15: oro de ASISTENCIA (el mayor dañador
+// con ≥35% del maxHp cobra un extra si no dio el golpe final) · 16 (issue #7): 5
+// recetas de fusión nuevas (toxicstorm/shredder/siegeeye/alchemyvault/icelance)
+export const BALANCE_VERSION = 16;
 export const PROTOCOL_VERSION = 1;

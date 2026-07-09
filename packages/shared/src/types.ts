@@ -16,7 +16,9 @@ export type TowerTypeId =
   | 'trap' // Trampa de púas: se coloca SOBRE el camino; daño físico por cargas
   | 'alchemist' // Alquimista: aura económica (+bounty por bajas en su radio)
   // F4.4 — al FINAL del orden de snapshot
-  | 'boom'; // Barril explosivo: SOBRE el camino; detona una vez en área y desaparece
+  | 'boom' // Barril explosivo: SOBRE el camino; detona una vez en área y desaparece
+  // Lote 3 — al FINAL del orden de snapshot
+  | 'sentry'; // Sentry: NO ataca; REVELA a los monstruos invisibles dentro de su radio (item de tienda)
 
 export type EnemyTypeId =
   | 'goblin'
@@ -49,7 +51,13 @@ export type FusionId =
   | 'bigbertha' // Cañón + Mortero — obús de mapa completo, cooldown enorme
   | 'warlord' // Arquero + Estandarte — dispara Y buffea como estandarte
   | 'philostone' // Veneno + Alquimista — sus bajas por veneno pagan botín doble
-  | 'winterheart'; // Hielo + Estandarte — aura doble: ralentiza enemigos y acelera torres
+  | 'winterheart' // Hielo + Estandarte — aura doble: ralentiza enemigos y acelera torres
+  // issue #7 — nuevas recetas (al FINAL del orden de snapshot)
+  | 'toxicstorm' // Tesla + Veneno — cadena eléctrica que ENVENENA a cada enemigo que salta
+  | 'shredder' // Arquero + Cañón — autocañón de metralla: ráfaga de obuses ligeros en área
+  | 'siegeeye' // Francotirador + Mortero — ojo de asedio: dispara de mapa completo y REMATA
+  | 'alchemyvault' // Mina + Alquimista — bóveda: renta por oleada Y aura de botín
+  | 'icelance'; // Hielo + Francotirador — lanza gélida de largo alcance que casi congela
 
 // Afijos de enemigos élite. Cada uno modifica el estado del enemigo (ver step.ts).
 export type AffixId =
@@ -144,6 +152,11 @@ export interface TowerDef {
   // y se autodestruye: ELIMINA a los terrestres no-jefe en radio `splash`; a los
   // jefes les hace `damage` físico.
   detonates?: boolean;
+  // Lote 3 · Sentry: NO ataca. Cada tick marca como DETECTADOS a los enemigos
+  // invisibles dentro de su radio (= su `range`), volviéndolos targeteables y
+  // visibles para todo el equipo. No dispara (towerFires lo excluye), no se mejora
+  // ni especializa; solo se vende.
+  detects?: boolean;
 }
 
 export interface EnemyDef {
@@ -222,6 +235,16 @@ export interface EnemyState {
   lastWpIdx: number; // Behemot: último waypoint cruzado (para aturdir una vez por esquina)
   // --- F4.2 ---
   armorShredUntil: number; // tick hasta el que su armadura efectiva está a la MITAD (shred del Obús/Metralla II). 0 = sin shred
+  // --- Lote 3 · invisibilidad ---
+  invisible: boolean; // nace en una oleada INVISIBLE: las torres no pueden apuntarle ni verlo salvo si un Sentry lo detecta
+  detected: boolean; // recalculado por tick: true si está dentro del radio de algún Sentry del equipo (targeteable + visible)
+  // --- ORO DE ASISTENCIA (co-op) · AL FINAL ---
+  // Daño APLICADO acumulado por cada jugador contra este enemigo (playerId → daño; se
+  // guarda el DUEÑO de la torre fuente EN EL MOMENTO del golpe, NO el towerId — la torre
+  // puede venderse antes de la muerte). Lo alimentan damageEnemy (impactos/splash/línea/
+  // trampa/barril) y el tick de veneno (por poisonSrc). Al morir, killEnemy busca aquí al
+  // mayor dañador para el oro de asistencia. Determinista: acumulación en orden estable.
+  dmgBy: Record<string, number>;
 }
 
 export interface TowerState {
@@ -250,6 +273,15 @@ export interface TowerState {
   // fusionada conserva su `type` (el de la celda elegida) SOLO para arte/compat: todo
   // su comportamiento sale de la def de la fusión (level=3, spec=−1, sin más mejoras).
   fusion: number;
+  // --- Lote 4 · control avanzado ---
+  // FOCUS: id del enemigo al que esta torre debe atacar (0 = sin focus, targetMode
+  // normal). Si el enfocado muere/escapa, la sim lo limpia y vuelve al targetMode.
+  // Si está VIVO pero fuera de rango, la torre dispara normal mientras tanto y
+  // CONSERVA el focus para cuando vuelva a entrar en alcance (ver pickTarget).
+  focusId: number;
+  // STOP: una torre `halted` NO dispara (mismo gate que el aturdimiento). Solo
+  // aplica a torres que disparan; las auras/economía no son halteables.
+  halted: boolean;
 }
 
 export interface ProjectileState {
@@ -311,6 +343,8 @@ export interface SpawnEntry {
   immune?: boolean; // oleada inmune: el enemigo nace spellImmune
   blessed?: boolean; // oleada bendecida: aplica un afijo común sin el ×2.6 de hp
   blessedAffix?: AffixId; // el afijo común de la oleada bendecida
+  // Lote 3 · oleada invisible: el enemigo nace `invisible` (no en jefes)
+  invisible?: boolean;
 }
 
 export interface WaveComp {
@@ -335,6 +369,7 @@ export interface GameState {
   nextWaveImmune: boolean;
   nextWaveBlessed: boolean;
   nextWaveFlying: boolean;
+  nextWaveInvisible: boolean; // Lote 3 · la próxima oleada es INVISIBLE (telegrafía 👁)
   nextWaveBoss: EnemyTypeId | null;
   pendingWave: SpawnEntry[] | null; // oleada ya generada, esperando el fin del interludio
   pendingBoss: boolean;
@@ -368,9 +403,19 @@ export type Command =
   | { kind: 'sell_wood' }
   // F5.5 · mejora el orco leñador del jugador (oro → más tala/s, nivel 1..5)
   | { kind: 'upgrade_orc' }
+  // F7.1 · TRANSFERENCIA a un aliado (estilo Green TD): envía `gold`/`wood` (enteros
+  // ≥0, al menos uno >0) al jugador `to`. La sim valida destinatario, no-a-uno-mismo
+  // y fondos; comando NO confiable → toda validación vive en applyCommands.
+  | { kind: 'give'; to: string; gold: number; wood: number }
   // F4.3 · fusionar dos torres especializadas adyacentes con receta. `keepId` es la
   // torre cuya CELDA se conserva (debe ser towerId u otherId); la otra queda libre.
-  | { kind: 'fuse'; towerId: number; otherId: number; keepId: number };
+  | { kind: 'fuse'; towerId: number; otherId: number; keepId: number }
+  // Lote 4 · FOCUS: la torre ataca a ESE enemigo (enemyId 0 = quitar el focus y
+  // volver al targetMode automático). Solo torres que DISPARAN, del dueño.
+  | { kind: 'focus'; towerId: number; enemyId: number }
+  // Lote 4 · STOP/REANUDAR: on=true detiene la torre (no dispara), on=false la
+  // reanuda. Solo torres que DISPARAN, del dueño.
+  | { kind: 'halt'; towerId: number; on: boolean };
 
 export interface PlayerCommand {
   playerId: string;
@@ -434,6 +479,9 @@ export type GameEvent =
   | { e: 'trade'; playerId: string; buy: boolean; wood: number; gold: number; price: number }
   // F5.5 · el orco de un jugador subió de nivel (rate = nueva tala/s)
   | { e: 'orc'; playerId: string; level: number; rate: number }
+  // F7.1 · un jugador REGALÓ recursos a otro: el cliente lo convierte en toasts
+  // (emisor y receptor) y una línea de killfeed para toda la sala
+  | { e: 'give'; from: string; to: string; gold: number; wood: number }
   | { e: 'place'; x: number; y: number; towerType: TowerTypeId }
   | { e: 'upgrade'; x: number; y: number; level: number }
   | { e: 'specialize'; x: number; y: number; towerType: TowerTypeId; spec: number; name: string }
@@ -442,4 +490,8 @@ export type GameEvent =
   | { e: 'reject'; playerId: string; reason: string }
   | { e: 'boss'; name: string }
   | { e: 'gameover'; victory: boolean }
-  | { e: 'sys'; msg: string };
+  | { e: 'sys'; msg: string }
+  // ORO DE ASISTENCIA (co-op): el mayor dañador de un enemigo (≥35% de su maxHp) cobra
+  // un extra al morir este SI no fue quien dio el golpe final. `player` = playerId del
+  // asistente; `gold` = oro cobrado. El cliente pinta "+N 🤝" en su color.
+  | { e: 'assist'; x: number; y: number; gold: number; player: string };

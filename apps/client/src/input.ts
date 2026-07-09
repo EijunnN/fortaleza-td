@@ -1,8 +1,20 @@
-import { placementError, TOWER_ORDER, TOWERS, type PlacementError, type TowerTypeId } from '@td/shared';
+import { placementError, TOWERS, type PlacementError, type TowerTypeId } from '@td/shared';
 import { net } from './net.js';
+import { actionForKey, towerTypeForAction } from './keymap.js';
 import { myGold, store } from './store.js';
 import { centerOn, getPlacementCtx, getView, minimapHit, panBy, resetCamera, zoomAt } from './renderer.js';
-import { cancelPremoveAt, hidePanel, queuePlacePremove, showPanel, syncTowerBar, toast } from './hud.js';
+import {
+  armFocus,
+  cancelPremoveAt,
+  controllableSelectedIds,
+  hidePanel,
+  queuePlacePremove,
+  refreshPanel,
+  showPanel,
+  syncTowerBar,
+  toast,
+  toggleHaltSelection,
+} from './hud.js';
 import { installAudioUnlock } from './audio.js';
 
 // ¿el dispositivo tiene puntero con hover (ratón)? controla el fantasma bajo el
@@ -56,6 +68,7 @@ export function setPlacing(towerType: TowerTypeId | null): void {
   if (!gs) return;
   gs.selection = towerType ? { kind: 'placing', towerType } : null;
   gs.pendingPlace = null;
+  gs.focusArmed = false;
   hidePanel();
   syncTowerBar();
 }
@@ -65,8 +78,60 @@ export function clearSelection(): void {
   if (!gs) return;
   gs.selection = null;
   gs.pendingPlace = null;
+  gs.focusArmed = false;
   hidePanel();
   syncTowerBar();
+}
+
+// Lote 4 · hit-test de ENEMIGO para el modo focus: el más cercano al tap dentro
+// de un radio generoso (~0.6 celdas), contra el último snapshot. IGNORA a los
+// invisibles no detectados (no los ves — coherente con el render y con la sim,
+// que además rechaza el comando).
+function enemyAtPoint(canvas: HTMLCanvasElement, clientX: number, clientY: number): number | null {
+  const gs = store.game;
+  if (!gs?.latest) return null;
+  const w = worldFromPoint(canvas, clientX, clientY);
+  let best: number | null = null;
+  let bestD = 0.6;
+  for (const e of gs.latest.enemies) {
+    if ((e[5] & 64) !== 0 && (e[5] & 128) === 0) continue; // invisible sin detectar
+    const d = Math.hypot(e[2] - w.x, e[3] - w.y);
+    if (d < bestD) {
+      bestD = d;
+      best = e[0];
+    }
+  }
+  return best;
+}
+
+// Lote 4 · doble tap/click sobre una torre PROPIA: selecciona el GRUPO de todas
+// mis torres IDÉNTICAS (mismo tipo+nivel+spec+fusión exactos — así el coste de la
+// mejora en grupo es uniforme). Devuelve true si consumió el gesto.
+function selectTowerGroupAt(canvas: HTMLCanvasElement, clientX: number, clientY: number): boolean {
+  const gs = store.game;
+  if (!gs?.latest || store.spectator || store.replay) return false;
+  const cell = cellFromPoint(canvas, clientX, clientY);
+  if (!cell) return false;
+  const t = gs.latest.towers.find((tw) => tw[2] === cell.cx && tw[3] === cell.cy);
+  if (!t) return false;
+  if (gs.init.players[t[5]]?.id !== store.playerId) return false; // solo torres propias
+  const ids = gs.latest.towers
+    .filter(
+      (tw) =>
+        tw[5] === t[5] &&
+        tw[1] === t[1] &&
+        tw[4] === t[4] &&
+        (tw[9] ?? -1) === (t[9] ?? -1) &&
+        (tw[13] ?? -1) === (t[13] ?? -1),
+    )
+    .map((tw) => tw[0])
+    .sort((a, b) => a - b); // orden estable por id (mejora en grupo, focus…)
+  gs.focusArmed = false;
+  // única en su clase: se queda como selección individual (panel completo)
+  gs.selection = ids.length > 1 ? { kind: 'towers', ids } : { kind: 'tower', id: t[0] };
+  showPanel();
+  if (navigator.vibrate) navigator.vibrate(12);
+  return true;
 }
 
 // Validación local antes de enviar: si la celda es inválida avisa y NO saca al
@@ -123,6 +188,23 @@ function tapSelect(canvas: HTMLCanvasElement, clientX: number, clientY: number, 
 
   // el espectador no coloca torres ni abre el panel: cualquier otro toque no hace nada
   if (store.spectator) return;
+
+  // Lote 4 · modo FOCUS armado (🎯 / tecla F): este tap intenta fijar un enemigo
+  // como objetivo de TODAS las torres seleccionadas. Tap en vacío = cancelar.
+  if (gs.focusArmed) {
+    const ids = controllableSelectedIds();
+    const enemyId = enemyAtPoint(canvas, clientX, clientY);
+    gs.focusArmed = false;
+    if (enemyId !== null && ids.length > 0) {
+      for (const id of ids) net.send({ type: 'cmd', cmd: { kind: 'focus', towerId: id, enemyId } });
+      toast(ids.length > 1 ? `🎯 ${ids.length} torres atacando a ese objetivo` : '🎯 Objetivo fijado', 'info');
+      if (navigator.vibrate) navigator.vibrate(12);
+    } else {
+      toast('🎯 Cancelado', 'info');
+    }
+    refreshPanel();
+    return;
+  }
 
   const cell = cellFromPoint(canvas, clientX, clientY);
   if (!cell) {
@@ -329,8 +411,10 @@ export function initInput(canvas: HTMLCanvasElement): void {
     lastTapX = e.clientX;
     lastTapY = e.clientY;
 
-    // doble tap fuera del modo construcción: reencuadrar la cámara
+    // doble tap fuera del modo construcción: sobre una torre PROPIA selecciona su
+    // GRUPO de idénticas (Lote 4); en cualquier otro sitio, reencuadra la cámara.
     if (isDouble && gs?.selection?.kind !== 'placing') {
+      if (!gs?.focusArmed && selectTowerGroupAt(canvas, e.clientX, e.clientY)) return;
       resetCamera();
       return;
     }
@@ -385,6 +469,13 @@ export function initInput(canvas: HTMLCanvasElement): void {
         syncTowerBar();
         return;
       }
+      // Lote 4 · ESC con el modo focus armado: solo cancela el modo (la selección
+      // se conserva); un segundo ESC ya deselecciona.
+      if (store.game.focusArmed) {
+        store.game.focusArmed = false;
+        refreshPanel();
+        return;
+      }
       clearSelection();
       return;
     }
@@ -395,17 +486,32 @@ export function initInput(canvas: HTMLCanvasElement): void {
     // bomba llegaba como 'W' y no coincidía con la hotkey 'w'.
     const key = e.key.toLowerCase();
 
-    // mercado por teclado (sin abrir el panel): C compra un lote, V lo vende.
-    // El toast de la operación (o el rechazo) da el feedback.
-    if (!store.spectator && key === 'c') {
-      net.send({ type: 'cmd', cmd: { kind: 'buy_wood' } });
+    // todas las teclas de acción salen del keymap editable (ver keymap.ts). Una
+    // tecla sin acción asignada no hace nada.
+    const action = actionForKey(key);
+    if (!action) return;
+
+    // mercado por teclado (sin abrir el panel): comprar/vender un lote de madera.
+    // El toast de la operación (o el rechazo) da el feedback. Solo jugadores.
+    if (action === 'market_buy') {
+      if (!store.spectator) net.send({ type: 'cmd', cmd: { kind: 'buy_wood' } });
       return;
     }
-    if (!store.spectator && key === 'v') {
-      net.send({ type: 'cmd', cmd: { kind: 'sell_wood' } });
+    if (action === 'market_sell') {
+      if (!store.spectator) net.send({ type: 'cmd', cmd: { kind: 'sell_wood' } });
       return;
     }
-    const type = TOWER_ORDER.find((t) => TOWERS[t].hotkey === key);
+    // Lote 4 · control de la selección actual (torre o grupo): stop/reanudar y
+    // armar el modo focus. Ambas son no-op sin una selección controlable.
+    if (action === 'stop') {
+      if (!store.spectator) toggleHaltSelection();
+      return;
+    }
+    if (action === 'focus') {
+      if (!store.spectator) armFocus();
+      return;
+    }
+    const type = towerTypeForAction(action);
     if (type) {
       // espectador: la hotkey arma/desarma el "modo sugerencia" de esa torre
       if (store.spectator) {

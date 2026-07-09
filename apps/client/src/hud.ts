@@ -16,6 +16,7 @@ import {
   TICK_RATE,
   TOWERS,
   TOWER_ORDER,
+  towerFires,
   towerLevel,
   towerTotalCost,
   ORC_RATES,
@@ -25,15 +26,17 @@ import {
   WOOD_LOT,
   WOOD_SELL_SPREAD,
   type Snap,
+  type SnapTower,
   type TargetMode,
   type TowerDef,
   type TowerLevelDef,
   type TowerTypeId,
 } from '@td/shared';
 import { net } from './net.js';
-import { myGold, myWood, store, type Premove } from './store.js';
+import { myGold, myWood, store, type GameStore, type Premove } from './store.js';
 import { computeBannerAuras, countBannerTargets, ENEMY_ICONS, getPlacementCtx, TOWER_ICONS, type ClientAura } from './renderer.js';
 import { clearSelection, setPlacing } from './input.js';
+import { keyLabel } from './keymap.js';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -66,7 +69,7 @@ function premoveUpgradeCost(snap: Snap, towerId: number): { gold: number; wood: 
   const level = t[4];
   const spec = t[9] ?? -1;
   const fusion = t[13] ?? -1;
-  if (fusion >= 0 || TOWERS[type].onPathOnly) return null;
+  if (fusion >= 0 || TOWERS[type].onPathOnly || TOWERS[type].detects) return null;
   if (spec >= 0) {
     if (level >= 4 || !hasRank2(type, spec)) return null;
     return { gold: rank2Cost(type, spec) ?? 0, wood: WOOD_COST_RANK2 };
@@ -196,7 +199,9 @@ export function buildTowerBar(): void {
   const bar = $('hud-towers');
   bar.innerHTML = '';
   const flat = BAR_GROUPS.flat();
-  const extras = TOWER_ORDER.filter((t) => !flat.includes(t));
+  // el Sentry NO va en la barra (se compra en la 🛒 Tienda): se excluye también de
+  // la red de seguridad de "extras" que recoge cualquier torre no agrupada.
+  const extras = TOWER_ORDER.filter((t) => !flat.includes(t) && t !== 'sentry');
   const groups = extras.length > 0 ? [...BAR_GROUPS, extras] : BAR_GROUPS;
   for (let gi = 0; gi < groups.length; gi++)
   for (let ti = 0; ti < groups[gi].length; ti++) {
@@ -208,7 +213,7 @@ export function buildTowerBar(): void {
     card.dataset.type = type;
     card.title = `${def.name} — ${def.desc}`;
     card.innerHTML = `
-      <span class="thk">${def.hotkey}</span>
+      <span class="thk">${keyLabel(`tower:${type}`)}</span>
       <img class="tsprite" alt="" src="/sprites/tower_${type}_l1.png" />
       <span class="ticon">${TOWER_ICONS[type]}</span>
       <span class="tname">${def.name}</span>
@@ -242,6 +247,18 @@ export function buildTowerBar(): void {
   }
 }
 
+// Refresca en caliente las teclas visibles cuando el jugador remapea un atajo
+// desde la Guía: el badge `.thk` de cada tarjeta de torre y (si hay panel abierto)
+// los khints [stop]/[focus]. El mercado se rehace solo en el próximo tick.
+export function syncHotkeyLabels(): void {
+  for (const card of document.querySelectorAll<HTMLElement>('.tcard')) {
+    const type = card.dataset.type as TowerTypeId;
+    const thk = card.querySelector<HTMLElement>('.thk');
+    if (thk) thk.textContent = keyLabel(`tower:${type}`);
+  }
+  refreshPanel();
+}
+
 // resumen de las propiedades especiales de un nivel de torre
 function specialStats(lvl: TowerLevelDef): string[] {
   const out: string[] = [];
@@ -273,10 +290,11 @@ function syncPlacingInfo(): void {
   const isAura = lvl.auraDamage !== undefined || lvl.auraHaste !== undefined || lvl.auraBounty !== undefined;
   if (lvl.damage > 0 && !def.onPathOnly) parts.push(`Daño <b>${lvl.damage}</b>`);
   if (def.onPathOnly) parts.push(def.detonates ? `💥 Detona al pisarlo: <b>ELIMINA</b> a los terrestres del área (jefes: ${lvl.damage} de daño)` : `Daño por golpe <b>${lvl.damage}</b>`);
+  if (def.detects) parts.push('👁 <b>Revela invisibles</b> en su radio');
   if (lvl.auraDamage !== undefined && lvl.auraDamage > 0) parts.push(`Aura de daño <b>+${Math.round(lvl.auraDamage * 100)}%</b>`);
   if (lvl.auraHaste !== undefined && lvl.auraHaste > 0) parts.push(`Aura de cadencia <b>+${Math.round(lvl.auraHaste * 100)}%</b>`);
   if (lvl.auraBounty !== undefined && lvl.auraBounty > 0) parts.push(`Aura de oro <b>+${Math.round(lvl.auraBounty * 100)}%</b>`);
-  if (lvl.range > 0) parts.push(`${isAura ? 'Radio' : 'Alcance'} <b>${lvl.range}</b>`);
+  if (lvl.range > 0) parts.push(`${isAura || def.detects ? 'Radio' : 'Alcance'} <b>${lvl.range}</b>`);
   if (lvl.cooldown > 0) parts.push(`Cadencia <b>${lvl.cooldown}s</b>`);
   parts.push(...specialStats(lvl));
   const hint = window.matchMedia('(hover: hover)').matches
@@ -308,15 +326,38 @@ export function syncTowerBar(): void {
 
 // ---------- modo espectador ----------
 
+// issue #5: en móvil, la barra de torres del espectador (modo sugerencia) roba
+// media pantalla y no sirve para construir — empieza ESCONDIDA en cada partida
+// (nunca persistida) y un botón flotante 🏗 la muestra/esconde. Solo aplica por
+// debajo del breakpoint móvil (CSS); en escritorio la barra sigue como siempre.
+let specTowersOpen = false;
+
+function syncSpecTowersToggle(): void {
+  const spec = store.spectator;
+  $('screen-game').classList.toggle('spectating', spec);
+  $('screen-game').classList.toggle('spec-towers-open', spec && specTowersOpen);
+  $('btn-towers-toggle').hidden = !spec;
+}
+
+// alterna la barra de torres del espectador móvil (botón 🏗)
+export function toggleSpectatorTowers(): void {
+  specTowersOpen = !specTowersOpen;
+  syncSpecTowersToggle();
+}
+
 // Aplica (o revierte) el modo espectador de la UI del juego: banner persistente,
 // oculta el oro propio, los botones de acción de jugador (llamar oleada, pausa,
 // velocidad) y el panel de mejora/venta. La barra de torres se mantiene (en modo
-// sugerencia). Se llama al entrar a la partida (jugador o espectador).
+// sugerencia; en móvil, escondida por defecto tras el botón 🏗 — issue #5). Se
+// llama al entrar a la partida (jugador o espectador): por eso también es donde
+// se reinicia specTowersOpen, para que nunca sobreviva de una partida a otra.
 export function applySpectatorUI(): void {
   const spec = store.spectator;
   $('spectator-banner').hidden = !spec;
   $('hud-gold').hidden = spec;
   $('hud-wood').hidden = spec;
+  specTowersOpen = false;
+  syncSpecTowersToggle();
   if (spec) {
     // un espectador nunca ve estos controles (ya se ocultan por !isHost, pero por
     // si acaso: un espectador jamás es anfitrión)
@@ -365,8 +406,8 @@ function wirePanel(): void {
   window.addEventListener('pointercancel', releasePanel);
   $('hud-panel').addEventListener('click', (e) => {
     const gs = store.game;
-    if (!gs || gs.selection?.kind !== 'tower') return;
-    const towerId = gs.selection.id;
+    const sel = gs?.selection;
+    if (!gs || !sel || (sel.kind !== 'tower' && sel.kind !== 'towers')) return;
     const target = e.target as HTMLElement;
     // el botón ✕ cierra el panel y deselecciona (imprescindible en móvil, donde
     // el panel es una hoja inferior y "tocar fuera" no siempre es obvio)
@@ -374,10 +415,44 @@ function wirePanel(): void {
       clearSelection();
       return;
     }
+
+    // ---- acciones comunes a torre y GRUPO (Lote 4) ----
+    // ⏹/▶ stop-reanudar, 🎯 armar focus, ✕ volver al automático. Aplican a todas
+    // las torres controlables de la selección (mías y que disparan).
+    if (target.closest('#panel-halt')) {
+      toggleHaltSelection();
+      return;
+    }
+    if (target.closest('#panel-focus')) {
+      armFocus();
+      return;
+    }
+    if (target.closest('#panel-unfocus')) {
+      clearFocusSelection();
+      return;
+    }
+    const mode = target.closest<HTMLElement>('.tmode')?.dataset.mode;
+
+    // ---- GRUPO (Lote 4): mejorar todas + modo de objetivo en grupo ----
+    if (sel.kind === 'towers') {
+      const gUpgrade = target.closest<HTMLButtonElement>('#gpanel-upgrade');
+      if (gUpgrade && !gUpgrade.disabled) {
+        groupUpgradeAll();
+        return;
+      }
+      if (mode) {
+        for (const id of sel.ids) {
+          net.send({ type: 'cmd', cmd: { kind: 'target', towerId: id, mode: mode as TargetMode } });
+        }
+      }
+      return;
+    }
+
+    // ---- torre individual (flujo clásico) ----
+    const towerId = sel.id;
     const upgrade = target.closest<HTMLButtonElement>('#panel-upgrade');
     const sell = target.closest<HTMLButtonElement>('#panel-sell');
     const specBtn = target.closest<HTMLButtonElement>('.spec-btn');
-    const mode = target.closest<HTMLElement>('.tmode')?.dataset.mode;
     const fuseBtn = target.closest<HTMLButtonElement>('.fuse-btn');
     if (upgrade && !upgrade.disabled) {
       // botón de mejora en modo premovimiento (sin oro suficiente): encola/cancela
@@ -403,6 +478,117 @@ function wirePanel(): void {
       net.send({ type: 'cmd', cmd: { kind: 'target', towerId, mode: mode as TargetMode } });
     }
   });
+}
+
+// ---------- Lote 4 · control avanzado (stop / focus) sobre la selección ----------
+
+// Tuplas de la selección actual (torre única o grupo) presentes en el snapshot.
+function selectedTuples(gs: GameStore): SnapTower[] {
+  const snap = gs.latest;
+  const sel = gs.selection;
+  if (!snap || !sel) return [];
+  const ids = sel.kind === 'tower' ? [sel.id] : sel.kind === 'towers' ? sel.ids : [];
+  const out: SnapTower[] = [];
+  for (const id of ids) {
+    const t = snap.towers.find((tt) => tt[0] === id);
+    if (t) out.push(t);
+  }
+  return out;
+}
+
+// ¿La torre de esta tupla DISPARA? (mismo criterio que la sim: comparte towerFires)
+function tupleFires(t: SnapTower): boolean {
+  return towerFires({ type: TOWER_ORDER[t[1]], level: t[4], spec: t[9] ?? -1, fusion: t[13] ?? -1 });
+}
+
+// Ids de las torres CONTROLABLES de la selección: MÍAS y que DISPARAN (stop y
+// focus no significan nada en auras/economía; la sim los rechazaría igual).
+// La usan los botones del panel, las hotkeys X/F y el tap del modo focus.
+export function controllableSelectedIds(): number[] {
+  const gs = store.game;
+  if (!gs || store.spectator || store.replay) return [];
+  return selectedTuples(gs)
+    .filter((t) => gs.init.players[t[5]]?.id === store.playerId && tupleFires(t))
+    .map((t) => t[0]);
+}
+
+// ⏹/▶ (botón del panel y tecla X): si ALGUNA torre controlable de la selección
+// está detenida → reanuda TODAS; si no, las detiene todas. Así el botón "mixto"
+// siempre converge al estado que pide su etiqueta.
+export function toggleHaltSelection(): void {
+  const gs = store.game;
+  const snap = gs?.latest;
+  if (!gs || !snap) return;
+  const ids = controllableSelectedIds();
+  if (ids.length === 0) return;
+  const byId = new Map(snap.towers.map((t) => [t[0], t]));
+  const anyHalted = ids.some((id) => ((byId.get(id)?.[17] ?? 0) as number) === 1);
+  for (const id of ids) net.send({ type: 'cmd', cmd: { kind: 'halt', towerId: id, on: !anyHalted } });
+  toast(
+    anyHalted
+      ? ids.length > 1
+        ? '▶ Torres reanudadas'
+        : '▶ Torre reanudada'
+      : ids.length > 1
+        ? '⏹ Torres detenidas'
+        : '⏹ Torre detenida',
+    'info',
+  );
+  refreshPanel();
+}
+
+// 🎯 (botón del panel y tecla F): arma/desarma el modo focus — el siguiente tap
+// sobre un enemigo manda `focus` por cada torre seleccionada (ver input.ts).
+export function armFocus(): void {
+  const gs = store.game;
+  if (!gs) return;
+  if (controllableSelectedIds().length === 0) return;
+  gs.focusArmed = !gs.focusArmed;
+  if (gs.focusArmed) toast('🎯 Toca un enemigo para fijar el objetivo (ESC cancela)', 'info');
+  refreshPanel();
+}
+
+// ✕ del estado "Atacando: …": quita el focus (vuelta al targetMode automático)
+// de todas las torres de la selección que tuvieran uno.
+export function clearFocusSelection(): void {
+  const gs = store.game;
+  const snap = gs?.latest;
+  if (!gs || !snap) return;
+  const byId = new Map(snap.towers.map((t) => [t[0], t]));
+  const ids = controllableSelectedIds().filter((id) => ((byId.get(id)?.[18] ?? 0) as number) > 0);
+  if (ids.length === 0) return;
+  for (const id of ids) net.send({ type: 'cmd', cmd: { kind: 'focus', towerId: id, enemyId: 0 } });
+  toast('🎯 Objetivo liberado: vuelven al modo automático', 'info');
+  refreshPanel();
+}
+
+// ⬆ Mejorar todas (grupo): manda un `upgrade` por torre EN ORDEN ESTABLE por id,
+// descontando un presupuesto local (oro Y madera — el Rango II cuesta ambas); si
+// no alcanza para todas, mejora las que alcancen y el toast lo resume. El server
+// valida cada comando igualmente.
+function groupUpgradeAll(): void {
+  const gs = store.game;
+  const snap = gs?.latest;
+  if (!gs || !snap || gs.selection?.kind !== 'towers') return;
+  let gold = myGold(gs);
+  let wood = myWood(gs);
+  const ids = [...gs.selection.ids].sort((a, b) => a - b);
+  let upgradable = 0;
+  let sent = 0;
+  for (const id of ids) {
+    const cost = premoveUpgradeCost(snap, id);
+    if (!cost) continue; // al máximo / requiere especializar: no cuenta
+    upgradable += 1;
+    if (gold >= cost.gold && wood >= cost.wood) {
+      net.send({ type: 'cmd', cmd: { kind: 'upgrade', towerId: id } });
+      gold -= cost.gold;
+      wood -= cost.wood;
+      sent += 1;
+    }
+  }
+  if (upgradable === 0) return;
+  if (sent === 0) toast('No te alcanzan los recursos para mejorar ninguna');
+  else toast(`⬆ Mejoradas ${sent}/${upgradable}`, 'info');
 }
 
 // Líneas de stats de un bloque activo (con vista previa opcional del siguiente
@@ -488,6 +674,7 @@ function targetModesHtml(projKind: string, lvl: TowerLevelDef, modeIdx: number):
 function towerAttacks(lvl: TowerLevelDef, def: TowerDef): boolean {
   if (lvl.alsoFires) return true;
   if (def.onPathOnly) return false;
+  if (def.detects) return false; // el Sentry no dispara: solo detecta
   if (lvl.incomePerWave) return false;
   if (lvl.slowAura) return false;
   if (lvl.auraBounty !== undefined) return false;
@@ -497,10 +684,12 @@ function towerAttacks(lvl: TowerLevelDef, def: TowerDef): boolean {
 
 // F6.2 · texto del contador de próximo ataque a partir de la tupla del snapshot.
 // El aturdimiento (índice 10) manda sobre el cooldown: una torre aturdida no
-// dispara. cdTicks (índice 16) son los ticks que faltan para el próximo disparo;
+// dispara. Lote 4: una torre DETENIDA (índice 17) tampoco — ⏸ manda sobre todo.
+// cdTicks (índice 16) son los ticks que faltan para el próximo disparo;
 // 0 = lista. Con el juego en PAUSA no llegan ticks, así que el valor se congela
 // solo (comportamiento correcto, sin trabajo extra).
-function cooldownText(stunned: number, cdTicks: number): string {
+function cooldownText(stunned: number, cdTicks: number, halted = 0): string {
+  if (halted) return '⏸ Detenida';
   if (stunned) return '💫 Aturdida';
   return cdTicks <= 0 ? '⚔️ listo' : `⚔️ ${(cdTicks / TICK_RATE).toFixed(1)}s`;
 }
@@ -508,25 +697,172 @@ function cooldownText(stunned: number, cdTicks: number): string {
 export function refreshPanel(): void {
   const gs = store.game;
   const panel = $('hud-panel');
-  if (!gs || gs.selection?.kind !== 'tower' || !gs.latest) {
+  const sel = gs?.selection ?? null;
+  if (!gs || !gs.latest || !sel || (sel.kind !== 'tower' && sel.kind !== 'towers')) {
     panel.hidden = true;
     $('screen-game').classList.remove('panel-open');
     return;
   }
-  const selectedId = gs.selection.id;
-  const data = gs.latest.towers.find((t) => t[0] === selectedId);
-  if (!data) {
-    // la torre ya no existe (vendida / trampa agotada / barril detonado)
+  // Lote 4: el panel tiene dos formas — torre individual y GRUPO (doble click).
+  // Ambas devuelven {html, live} y comparten la escritura anti-robo-de-clicks.
+  const built = sel.kind === 'towers' ? buildGroupPanel(gs, sel) : buildTowerPanel(gs, sel.id);
+  if (!built) {
+    // la selección ya no existe (vendida / trampa agotada / barril detonado)
     panel.hidden = true;
     $('screen-game').classList.remove('panel-open');
     gs.selection = null;
     return;
   }
+  const { html, live } = built;
+  wirePanel();
+  // ESTRUCTURA: solo reescribir si cambió de verdad (los contadores volátiles ya
+  // no entran aquí) y NUNCA con un dedo presionando el panel — reescribir
+  // destruye el botón bajo el dedo y el click se pierde.
+  const structuralChanged = html !== lastPanelHtml;
+  if (structuralChanged && !panelHeld) {
+    lastPanelHtml = html;
+    panel.innerHTML = html;
+  }
+  // VOLÁTILES: actualizar por textContent (no destruye nada, no roba clicks)
+  if (!structuralChanged || !panelHeld) {
+    for (const [k, v] of Object.entries(live)) {
+      const el = panel.querySelector<HTMLElement>(`[data-lv="${k}"]`);
+      if (el && el.textContent !== v) el.textContent = v;
+    }
+  }
+  panel.hidden = false;
+  // en móvil el panel es una hoja inferior que SUSTITUYE a la barra de torres
+  $('screen-game').classList.add('panel-open');
+}
+
+// Lote 4 · panel de GRUPO: cabecera "N× torre" + acciones en lote (mejorar todas,
+// modo de objetivo, ⏹/▶, 🎯). SIN vender (evita ventas masivas accidentales:
+// véndese de una en una, como siempre). null = el grupo entero desapareció.
+function buildGroupPanel(
+  gs: GameStore,
+  sel: { kind: 'towers'; ids: number[] },
+): { html: string; live: Record<string, string> } | null {
+  const snap = gs.latest!;
+  const byId = new Map(snap.towers.map((t) => [t[0], t]));
+  const tuples = sel.ids.map((id) => byId.get(id)).filter((t): t is SnapTower => t !== undefined);
+  if (tuples.length === 0) return null;
+  // poda: torres del grupo vendidas/consumidas desde la selección
+  if (tuples.length !== sel.ids.length) sel.ids = tuples.map((t) => t[0]);
+  // el grupo colapsó a una: panel individual completo (más útil que un grupo de 1)
+  if (tuples.length === 1) {
+    gs.selection = { kind: 'tower', id: tuples[0][0] };
+    return buildTowerPanel(gs, tuples[0][0]);
+  }
+  const head = tuples[0];
+  const type = TOWER_ORDER[head[1]];
+  const def = TOWERS[type];
+  const level = head[4];
+  const spec = head[9] ?? -1;
+  const fusion = fusionByIndex(head[13] ?? -1);
+  const lvl = fusion ? fusion.stats : activeStats(type, level, spec);
+  const projKind = fusion ? fusion.projectileKind : def.projectileKind;
+  const n = tuples.length;
+  const fires = tupleFires(head);
+
+  const name = fusion
+    ? `${fusion.icon} ${fusion.name}`
+    : spec >= 0
+      ? `${TOWER_ICONS[type]} ${def.specs[spec].name}`
+      : `${TOWER_ICONS[type]} ${def.name}`;
+  const levelTag = fusion
+    ? '⚗ Fusión'
+    : level >= 4
+      ? '★★ Rango II'
+      : spec >= 0
+        ? '★ Élite'
+        : `Nv. ${level}${level >= 3 ? ' (máx)' : ''}`;
+
+  // agregados volátiles del grupo (cambian cada tick: van por data-lv, no al html)
+  const live: Record<string, string> = {
+    kills: String(tuples.reduce((acc, t) => acc + t[7], 0)),
+    damage: tuples.reduce((acc, t) => acc + t[8], 0).toLocaleString(),
+  };
+  const statLines = [
+    `Grupo de <b>${n}</b> torres idénticas (doble click)`,
+    'Bajas: <b data-lv="kills"></b> · Daño total: <b data-lv="damage"></b>',
+  ];
+
+  // ⬆ Mejorar todas: coste TOTAL real, sumado por torre (oro Y madera — p. ej. el
+  // Rango II cuesta ambas). El grupo nace idéntico, así que el unitario es uniforme;
+  // si una mejora parcial lo mezcló, la suma por torre sigue siendo exacta.
+  let upBtn = '';
+  {
+    let totalGold = 0;
+    let totalWood = 0;
+    let count = 0;
+    let minGold = Infinity;
+    let minWood = Infinity;
+    for (const t of tuples) {
+      const cost = premoveUpgradeCost(snap, t[0]);
+      if (!cost) continue;
+      totalGold += cost.gold;
+      totalWood += cost.wood;
+      count += 1;
+      if (cost.gold < minGold) {
+        minGold = cost.gold;
+        minWood = cost.wood;
+      }
+    }
+    if (count > 0) {
+      // desactivado solo si no alcanza NI para una (si alcanza para algunas,
+      // el click mejora esas y el toast resume "Mejoradas X/N")
+      const affordOne = myGold(gs) >= minGold && myWood(gs) >= minWood;
+      const woodTxt = totalWood > 0 ? ` · 🪵${totalWood}` : '';
+      upBtn = `<div class="prow"><button id="gpanel-upgrade" class="btn primary"${affordOne ? '' : ' disabled'}>⬆ Mejorar todas (${count}) 🪙${totalGold}${woodTxt}</button></div>`;
+    } else if (!fusion && spec < 0 && level >= 3 && !def.onPathOnly && !def.detects) {
+      statLines.push('<span class="hint">Al máximo: especialízalas de una en una (la rama se elige por torre)</span>');
+    }
+  }
+
+  // ⏹/▶ + 🎯, solo si el grupo DISPARA (auras/economía no se detienen ni apuntan)
+  let controls = '';
+  if (fires) {
+    const anyHalted = tuples.some((t) => (t[17] ?? 0) === 1);
+    const anyFocus = tuples.some((t) => (t[18] ?? 0) > 0);
+    const armed = gs.focusArmed;
+    controls = `
+      <div class="prow">
+        <button id="panel-halt" class="btn ghost">${anyHalted ? '▶ Reanudar todas' : '⏹ Detener todas'}</button>
+        <button id="panel-focus" class="btn ghost${armed ? ' armed' : ''}">${armed ? '🎯 Toca un enemigo…' : '🎯 Atacar objetivo…'}</button>
+      </div>
+      ${anyFocus ? '<div class="focus-line">🎯 Objetivo fijado <button id="panel-unfocus" class="btn small ghost">✕ automático</button></div>' : ''}`;
+  }
+
+  const html = `
+    <h3><span>${n}× ${name}</span><span class="lvl">${levelTag}</span><button id="panel-close" aria-label="Cerrar">✕</button></h3>
+    <div class="pstats">${statLines.join('<br>')}</div>
+    ${upBtn}
+    ${controls}
+    ${fires ? targetModesHtml(projKind, lvl, modeIdx4(tuples)) : ''}
+    <p class="hint" style="padding:4px 4px 0">💸 Vender no está disponible en grupo: véndelas de una en una</p>
+  `;
+  return { html, live };
+}
+
+// modo de objetivo del grupo: el común si TODAS coinciden; −1 (ninguno resaltado)
+// si está mezclado — pulsar uno lo unifica.
+function modeIdx4(tuples: SnapTower[]): number {
+  const first = tuples[0][6];
+  return tuples.every((t) => t[6] === first) ? first : -1;
+}
+
+// panel clásico de UNA torre: html + valores volátiles. null = ya no existe.
+function buildTowerPanel(gs: GameStore, selectedId: number): { html: string; live: Record<string, string> } | null {
+  const data = gs.latest!.towers.find((t) => t[0] === selectedId);
+  if (!data) return null;
   const [id, typeIdx, , , level, ownerIdx, modeIdx, kills, damage] = data;
+  const snap = gs.latest!;
   const spec = data[9] ?? -1;
   const stunned = data[10] ?? 0; // F6.2 · aturdida: no dispara (manda sobre el cooldown)
   const charges = data[11] ?? 0;
   const cdTicks = data[16] ?? 0; // F6.2 · ticks hasta el próximo disparo (0 = lista)
+  const halted = data[17] ?? 0; // Lote 4 · detenida por su dueño (⏸)
+  const focusId = data[18] ?? 0; // Lote 4 · enemigo enfocado (0 = automático)
   // F4.3: índice de fusión e inversión total (para el valor de venta de fusiones)
   const fusionIdx = data[13] ?? -1;
   const invested = data[14] ?? 0;
@@ -550,14 +886,14 @@ export function refreshPanel(): void {
   const r2cost = canRank2 ? rank2Cost(type, spec) : null;
 
   // aura de Estandarte activa SOBRE esta torre → el panel muestra stats efectivos
-  const auraBuff = computeBannerAuras(gs.latest).get(id);
+  const auraBuff = computeBannerAuras(snap).get(id);
   const statLines = statBlock(lvl, next, auraBuff);
   // F6.2 · contador de PRÓXIMO ATAQUE, solo para torres que disparan (las de apoyo
   // y las de camino no lo muestran). Va en un span con id estable para poder
   // refrescarlo en CADA tick desde onTick (a 15/s) sin re-renderizar el panel
   // entero (que solo se rehace 4/s). Ver la actualización directa en onTick.
   if (towerAttacks(lvl, def)) {
-    statLines.push(`Próximo disparo: <span id="panel-cd" class="pcd">${cooldownText(stunned, cdTicks)}</span>`);
+    statLines.push(`Próximo disparo: <span id="panel-cd" class="pcd">${cooldownText(stunned, cdTicks, halted)}</span>`);
   }
   // Valores VOLÁTILES (cambian cada tick en combate: bajas/daño/cargas/oro…):
   // van en spans estables `data-lv` y se actualizan por textContent, FUERA del
@@ -569,7 +905,7 @@ export function refreshPanel(): void {
   live.damage = damage.toLocaleString();
   // Estandarte (y fusiones con aura): cuántas torres está reforzando ahora mismo
   if (lvl.auraDamage !== undefined || lvl.auraHaste !== undefined) {
-    const n = countBannerTargets(gs.latest, id);
+    const n = countBannerTargets(snap, id);
     live.targets = `${n} ${n === 1 ? 'torre' : 'torres'}`;
     statLines.push('Reforzando <b data-lv="targets"></b>');
     // el Señor de la Guerra además dispara: muestra también su historial de combate
@@ -581,6 +917,9 @@ export function refreshPanel(): void {
     live.goldgen = `🪙${goldGen.toLocaleString()}`;
     statLines.push('Oro extra generado: <b data-lv="goldgen"></b>');
     if (goldGen === 0) statLines.push('<span class="hint">Aún nada: los enemigos deben MORIR dentro de su anillo</span>');
+  } else if (def.detects) {
+    // Sentry: no acumula bajas/daño; explica su función y su radio.
+    statLines.push('👁 Revela a los monstruos invisibles (aéreos y terrestres) dentro de su radio.');
   } else if (def.onPathOnly) {
     if (def.detonates) {
       // Barril explosivo: se consume al detonar (no tiene cargas que contar)
@@ -633,7 +972,7 @@ export function refreshPanel(): void {
   if (isMine && !fusion && specialized) {
     const seen = new Set<string>();
     const btns: string[] = [];
-    for (const other of gs.latest.towers) {
+    for (const other of snap.towers) {
       if (other[0] === id) continue;
       if ((other[9] ?? -1) < 0 || (other[13] ?? -1) >= 0) continue; // especializada y sin fusionar
       if (other[5] !== ownerIdx) continue; // mismo dueño
@@ -652,6 +991,26 @@ export function refreshPanel(): void {
     }
   }
 
+  // Lote 4 · fila de CONTROL (⏹/▶ stop + 🎯 focus) para torres propias que
+  // DISPARAN, con el estado "Atacando a…" y su ✕ (vuelta al automático). Las
+  // torres de apoyo/economía no la muestran (no disparan; la sim lo rechaza).
+  let controlRow = '';
+  if (isMine && tupleFires(data)) {
+    let focusLine = '';
+    if (focusId > 0) {
+      const fe = snap.enemies.find((e) => e[0] === focusId);
+      const ficon = fe ? ENEMY_ICONS[ENEMY_ORDER[fe[1]]] : '';
+      const fname = fe ? ENEMIES[ENEMY_ORDER[fe[1]]].name : 'objetivo fuera de vista';
+      focusLine = `<div class="focus-line">🎯 Atacando: ${ficon} ${fname} <button id="panel-unfocus" class="btn small ghost">✕ automático</button></div>`;
+    }
+    const armed = gs.focusArmed;
+    controlRow = `
+      <div class="prow">
+        <button id="panel-halt" class="btn ghost">${halted ? `▶ Reanudar <span class="khint">[${keyLabel('stop')}]</span>` : `⏹ Detener <span class="khint">[${keyLabel('stop')}]</span>`}</button>
+        <button id="panel-focus" class="btn ghost${armed ? ' armed' : ''}">${armed ? '🎯 Toca un enemigo…' : `🎯 Objetivo <span class="khint">[${keyLabel('focus')}]</span>`}</button>
+      </div>${focusLine}`;
+  }
+
   // acciones del dueño
   let actions = '';
   if (isMine) {
@@ -660,9 +1019,10 @@ export function refreshPanel(): void {
       actions = `
         <p class="spec-desc" style="padding:0 4px 6px">${fusion.desc}</p>
         <div class="prow"><button id="panel-sell" class="btn ghost">💸 Vender ${sellValue}</button></div>
-        ${targetModesHtml(projKind, lvl, modeIdx)}`;
-    } else if (def.onPathOnly) {
-      // Trampa de púas: no se mejora ni especializa; solo se puede vender.
+        ${targetModesHtml(projKind, lvl, modeIdx)}
+        ${controlRow}`;
+    } else if (def.onPathOnly || def.detects) {
+      // Trampa/Barril y Sentry: no se mejoran ni especializan; solo se pueden vender.
       actions = `<div class="prow"><button id="panel-sell" class="btn ghost">💸 Vender ${sellValue}</button></div>`;
     } else if (canSpecialize) {
       const wood = myWood(gs);
@@ -685,7 +1045,8 @@ export function refreshPanel(): void {
             )
             .join('')}
         </div>
-        <div class="prow"><button id="panel-sell" class="btn ghost">💸 Vender ${sellValue}</button></div>`;
+        <div class="prow"><button id="panel-sell" class="btn ghost">💸 Vender ${sellValue}</button></div>
+        ${controlRow}`;
     } else if (canRank2 && r2cost !== null) {
       // Rango II: mejora identidad de la especialización (reutiliza el comando upgrade)
       const r2desc = def.specs[spec].rank2?.desc ?? 'Mejora de Rango II';
@@ -702,7 +1063,8 @@ export function refreshPanel(): void {
           ${r2btn}
           <button id="panel-sell" class="btn ghost">💸 ${sellValue}</button>
         </div>
-        ${targetModesHtml(projKind, lvl, modeIdx)}`;
+        ${targetModesHtml(projKind, lvl, modeIdx)}
+        ${controlRow}`;
     } else {
       const nextCost = next?.cost ?? null;
       const maxedLabel = isRank2 ? 'Máximo (Rango II)' : 'Máximo';
@@ -720,7 +1082,8 @@ export function refreshPanel(): void {
           ${upBtn}
           <button id="panel-sell" class="btn ghost">💸 ${sellValue}</button>
         </div>
-        ${targetModesHtml(projKind, lvl, modeIdx)}`;
+        ${targetModesHtml(projKind, lvl, modeIdx)}
+        ${controlRow}`;
     }
   } else {
     actions = `<p class="hint">Torre de ${escapeHtml(owner?.name ?? 'otro jugador')}</p>`;
@@ -731,26 +1094,7 @@ export function refreshPanel(): void {
     <div class="pstats">${statLines.join('<br>')}</div>
     ${actions}
   `;
-  wirePanel();
-  // ESTRUCTURA: solo reescribir si cambió de verdad (los contadores volátiles ya
-  // no entran aquí) y NUNCA con un dedo presionando el panel — reescribir
-  // destruye el botón bajo el dedo y el click se pierde.
-  const structuralChanged = html !== lastPanelHtml;
-  if (structuralChanged && !panelHeld) {
-    lastPanelHtml = html;
-    panel.innerHTML = html;
-  }
-  // VOLÁTILES: actualizar por textContent (no destruye nada, no roba clicks)
-  if (!structuralChanged || !panelHeld) {
-    for (const [k, v] of Object.entries(live)) {
-      const el = panel.querySelector<HTMLElement>(`[data-lv="${k}"]`);
-      if (el && el.textContent !== v) el.textContent = v;
-    }
-  }
-  panel.hidden = false;
-  // en móvil el panel es una hoja inferior que SUSTITUYE a la barra de torres
-  $('screen-game').classList.add('panel-open');
-  void id;
+  return { html, live };
 }
 
 // ---------- barra superior y jugadores ----------
@@ -764,7 +1108,7 @@ let liveWave = -1;
 let liveGoldBase = 0;
 let liveLivesBase = 0;
 
-function liveChipHtml(snap: Snap): string {
+function liveStatsHtml(snap: Snap): string {
   const me = snap.players.find((p) => p.id === store.playerId);
   if (!me) return ''; // espectador: sin métricas propias
   const now = performance.now();
@@ -781,7 +1125,7 @@ function liveChipHtml(snap: Snap): string {
   const livesLost = Math.max(0, liveLivesBase - snap.lives);
   const parts = [`⚔️ ${dps}/s`, `🪙 +${goldWave}`];
   if (livesLost > 0) parts.push(`<span class="live-bad">💔 −${livesLost}</span>`);
-  return `<div class="pchip live-chip" title="Tu daño por segundo · oro ganado esta oleada · vidas perdidas esta oleada">${parts.join(' · ')}</div>`;
+  return `<div class="sb-live" title="Tu daño por segundo · oro ganado esta oleada · vidas perdidas esta oleada">${parts.join(' · ')}</div>`;
 }
 
 export function onTick(snap: Snap): void {
@@ -838,18 +1182,8 @@ export function onTick(snap: Snap): void {
     btn.hidden = true;
   }
 
-  // chips de jugadores + métricas en vivo propias (última "chip" de la columna)
-  const chips = $('hud-players');
-  chips.innerHTML =
-    snap.players
-      .map((p) => {
-        const info = gs.init.players.find((ip) => ip.id === p.id);
-        return `<div class="pchip ${p.connected ? '' : 'offline'}">
-        <span class="player-dot" style="background:${info?.color};color:${info?.color}"></span>
-        <span>${escapeHtml(info?.name ?? p.id)}</span><span class="pgold">🪙${p.gold}</span>
-      </div>`;
-      })
-      .join('') + liveChipHtml(snap);
+  // (los chips de jugadores de la esquina fueron REEMPLAZADOS por la tabla 📊,
+  //  que ahora vive fija en esa esquina; ver renderScoreboard/syncScoreboard)
 
   // vista previa de la próxima oleada
   const preview = $('hud-preview');
@@ -859,6 +1193,7 @@ export function onTick(snap: Snap): void {
     const tags: string[] = [];
     if (snap.nextImmune) tags.push('<span class="wave-tag immune" title="Inmune a la magia: solo daño físico">🛡 inmune</span>');
     if (snap.nextBlessed) tags.push('<span class="wave-tag blessed" title="¡Oleada bendecida: doble botín!">⭐ bendecida</span>');
+    if (snap.nextInvisible) tags.push('<span class="wave-tag invisible" title="Oleada INVISIBLE: sin un Sentry (🛒 Tienda) no puedes ver ni apuntar a los enemigos">👁 invisible</span>');
     if (snap.nextBossType >= 0) {
       const bossType = ENEMY_ORDER[snap.nextBossType];
       const bossFlying = ENEMIES[bossType]?.flying;
@@ -881,12 +1216,17 @@ export function onTick(snap: Snap): void {
   syncMarket(snap);
   processPremoves(snap); // dispara los premovimientos cuyo coste ya se alcanzó
 
-  // refrescar el panel de torre (máx 4 veces por segundo para no perder clicks)
+  // refrescar el panel de torre o de GRUPO (máx 4 veces por segundo para no perder clicks)
   const now = performance.now();
-  if (gs.selection?.kind === 'tower' && now - lastPanelSync > 250) {
+  if ((gs.selection?.kind === 'tower' || gs.selection?.kind === 'towers') && now - lastPanelSync > 250) {
     lastPanelSync = now;
     refreshPanel();
   }
+
+  // tabla de jugadores en vivo (F7.1): refresca daño/bajas mientras esté abierta
+  syncScoreboard(now);
+  // tienda (Lote 3): refresca costes/estado de compra mientras esté abierta
+  syncShop(now);
 
   // F6.2 · el contador de próximo ataque baja FLUIDO: se refresca en CADA tick
   // (15/s), no solo cuando el panel se rehace (4/s). Solo tocamos el span si
@@ -899,7 +1239,7 @@ export function onTick(snap: Snap): void {
     if (cdEl) {
       const t = snap.towers.find((tt) => tt[0] === sel.id);
       if (t) {
-        const txt = cooldownText(t[10] ?? 0, t[16] ?? 0);
+        const txt = cooldownText(t[10] ?? 0, t[16] ?? 0, t[17] ?? 0);
         if (cdEl.textContent !== txt) cdEl.textContent = txt;
       }
     }
@@ -925,9 +1265,9 @@ function syncMarket(snap: Snap): void {
   const gain = Math.floor(price * WOOD_SELL_SPREAD * WOOD_LOT);
   const buy = $<HTMLButtonElement>('market-buy');
   const sell = $<HTMLButtonElement>('market-sell');
-  // el atajo va en el propio botón (C/V): es donde el jugador mira al operar
-  setText(buy, `[C] Comprar ${WOOD_LOT} 🪵 — 🪙${cost}`);
-  setText(sell, `[V] Vender ${WOOD_LOT} 🪵 — +🪙${gain}`);
+  // el atajo va en el propio botón: es donde el jugador mira al operar (keymap)
+  setText(buy, `[${keyLabel('market_buy')}] Comprar ${WOOD_LOT} 🪵 — 🪙${cost}`);
+  setText(sell, `[${keyLabel('market_sell')}] Vender ${WOOD_LOT} 🪵 — +🪙${gain}`);
   buy.disabled = myGold(gs) < cost;
   sell.disabled = myWood(gs) < WOOD_LOT;
 
@@ -955,6 +1295,9 @@ export function initMarket(): void {
     if (store.spectator || store.replay) return; // mirones: sin trading
     panel.hidden = !panel.hidden;
     if (!panel.hidden) {
+      // vive en la misma esquina que 📊 y 🛒: abrir el mercado cierra los otros
+      $('scoreboard-panel').hidden = true;
+      $('shop-panel').hidden = true;
       // descubierto: apagar la llamada de atención para siempre
       localStorage.setItem('td_market_seen', '1');
       $('hud-wood').classList.remove('attn');
@@ -989,6 +1332,311 @@ export function initMarket(): void {
   repeatOnHold($<HTMLButtonElement>('market-buy'), () => net.send({ type: 'cmd', cmd: { kind: 'buy_wood' } }));
   repeatOnHold($<HTMLButtonElement>('market-sell'), () => net.send({ type: 'cmd', cmd: { kind: 'sell_wood' } }));
   repeatOnHold($<HTMLButtonElement>('orc-upgrade'), () => net.send({ type: 'cmd', cmd: { kind: 'upgrade_orc' } }));
+}
+
+// ---------- tienda de items (Lote 3) ----------
+// Panel 🛒 con una rejilla de items. Estructura lista para más items: array de defs.
+// Por ahora 1 item: el Sentry (revela invisibles). Comprar = entrar en MODO COLOCACIÓN
+// (setPlacing) — el flujo de pago/colocación ya existe vía el comando `place`.
+
+interface ShopItem {
+  towerType: TowerTypeId;
+  icon: string;
+  name: string;
+  desc: string;
+}
+
+const SHOP_ITEMS: ShopItem[] = [
+  {
+    towerType: 'sentry',
+    icon: '👁',
+    name: 'Sentry',
+    desc: 'Revela monstruos invisibles (terrestres y aéreos) en su radio. Colócalo cubriendo el camino en las oleadas 👁.',
+  },
+];
+
+let lastShopSync = 0;
+
+// (re)construye la rejilla de items con costes y estado (throttle desde onTick).
+export function renderShop(): void {
+  const gs = store.game;
+  if (!gs) return;
+  const gold = myGold(gs);
+  $('shop-grid').innerHTML = SHOP_ITEMS.map((it) => {
+    const cost = TOWERS[it.towerType].levels[0].cost;
+    const poor = gold < cost;
+    const placing = gs.selection?.kind === 'placing' && gs.selection.towerType === it.towerType;
+    return `<button class="shop-item${placing ? ' selected' : ''}${poor ? ' poor' : ''}" data-item="${it.towerType}">
+      <span class="shop-icon">${it.icon}</span>
+      <span class="shop-info"><b>${it.name}</b><span class="shop-desc">${it.desc}</span></span>
+      <span class="shop-cost">🪙${cost}</span>
+    </button>`;
+  }).join('');
+}
+
+function syncShop(now: number): void {
+  if ($('shop-panel').hidden) return;
+  if (now - lastShopSync < 250) return;
+  lastShopSync = now;
+  renderShop();
+}
+
+// Cablea la tienda: 🛒 la abre/cierra; ✕ o un toque fuera la cierran; comprar un
+// item entra en modo colocación (como tocar la barra de torres).
+export function initShop(): void {
+  const panel = $('shop-panel');
+  const btn = $('btn-shop');
+  const setOpen = (v: boolean): void => {
+    panel.hidden = !v;
+    btn.setAttribute('aria-expanded', String(v));
+    if (v) {
+      // vive en la misma esquina que 📊 y 🪵: abrir uno cierra los otros
+      $('scoreboard-panel').hidden = true;
+      $('market-panel').hidden = true;
+      renderShop();
+    }
+  };
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (store.spectator || store.replay) return; // los mirones no compran
+    setOpen(panel.hidden);
+  });
+  $('shop-close').addEventListener('click', (e) => {
+    e.stopPropagation();
+    setOpen(false);
+  });
+  // clic dentro no cierra; un toque fuera sí (mismo patrón que mercado/tabla)
+  panel.addEventListener('click', (e) => e.stopPropagation());
+  document.addEventListener('click', () => {
+    if (!panel.hidden) setOpen(false);
+  });
+  // comprar = armar la colocación del item; el pago se hace al plantar (comando place)
+  $('shop-grid').addEventListener('click', (e) => {
+    const el = (e.target as HTMLElement).closest<HTMLElement>('[data-item]');
+    if (!el) return;
+    const type = el.dataset.item as TowerTypeId;
+    const cur = store.game?.selection;
+    setPlacing(cur?.kind === 'placing' && cur.towerType === type ? null : type);
+    setOpen(false);
+  });
+}
+
+// ---------- tabla de jugadores en vivo (F7.1) ----------
+// Los chips de arriba quedan compactos (nombre · oro); el botón 📊 expande esta
+// tabla flotante con oro/madera + DAÑO y BAJAS de la partida (reutiliza los stats
+// por jugador del snapshot), y el botón 🎁 para REGALAR recursos a un aliado.
+
+let lastScoreboardSync = 0;
+let giveTarget: string | null = null; // playerId al que se va a regalar (null = sin formulario)
+
+// daño compacto: 12345 → "12.3k", 999 → "999"
+function fmtDmg(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+}
+
+// entero ≥0 y acotado a partir de un valor de input (defensa; el server revalida)
+function clampInt(v: string): number {
+  const n = Math.floor(Number(v));
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.min(n, 99999);
+}
+
+// (re)construye la tabla; se llama en cada snapshot con el panel abierto (throttle
+// en onTick). El mini-formulario de regalo vive en otro contenedor, así que
+// refrescar la tabla NO pisa lo que el jugador está escribiendo.
+export function renderScoreboard(): void {
+  const gs = store.game;
+  const snap = gs?.latest;
+  if (!gs || !snap) return;
+  const meId = store.playerId;
+  const canGive = !store.spectator && !store.replay && snap.players.some((p) => p.id === meId);
+  const rows = snap.players
+    .map((p) => {
+      const info = gs.init.players.find((ip) => ip.id === p.id);
+      const isMe = p.id === meId;
+      const name = escapeHtml(info?.name ?? p.id); // nombre de usuario: SIEMPRE escapado
+      const give =
+        canGive && !isMe
+          ? `<button class="btn small ghost sb-give" data-give="${escapeHtml(p.id)}" aria-label="Enviar recursos a ${name}" title="Enviar oro/madera a ${name}">🎁</button>`
+          : '';
+      return `<tr class="${isMe ? 'sb-me' : ''}${p.connected ? '' : ' offline'}">
+        <td class="sb-name"><span class="sb-dot" style="background:${info?.color};color:${info?.color}"></span>${name}</td>
+        <td>🪙${p.gold}</td>
+        <td>🪵${p.wood}</td>
+        <td class="sb-dmg">${fmtDmg(p.damage)}</td>
+        <td class="sb-kills">${p.kills}</td>
+        <td>${give}</td>
+      </tr>`;
+    })
+    .join('');
+  // pie con las métricas en vivo propias (antes vivían en el chip ⚔ de la esquina,
+  // que esta tabla reemplaza): dps · oro de la oleada · vidas perdidas de la oleada
+  $('scoreboard-body').innerHTML = `<table>
+    <thead><tr>
+      <th class="sb-name">Jugador</th><th>🪙</th><th>🪵</th>
+      <th title="Daño total de la partida">⚔️</th><th title="Bajas totales">💀</th><th></th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>${liveStatsHtml(snap)}`;
+}
+
+// dibuja (o limpia) el mini-formulario de regalo según `giveTarget`. Solo se llama
+// al elegir/cambiar de aliado o al enviar/cancelar — nunca en el refresco de la
+// tabla, para no perder el foco ni los valores mientras se escribe.
+function renderGiveForm(): void {
+  const box = $('scoreboard-give');
+  const gs = store.game;
+  if (!giveTarget || !gs) {
+    box.innerHTML = '';
+    return;
+  }
+  const info = gs.init.players.find((ip) => ip.id === giveTarget);
+  const name = escapeHtml(info?.name ?? giveTarget);
+  box.innerHTML = `
+    <div class="sb-give-title">🎁 Enviar a <b>${name}</b></div>
+    <div class="sb-give-row">
+      <span class="sb-give-lbl">🪙</span>
+      <input id="give-gold" type="number" inputmode="numeric" min="0" step="10" value="0" aria-label="Oro a enviar" />
+      <button class="btn small ghost sb-quick" data-add-gold="10">+10</button>
+      <button class="btn small ghost sb-quick" data-add-gold="50">+50</button>
+      <button class="btn small ghost sb-quick" data-add-gold="100">+100</button>
+      <button class="btn small ghost sb-quick" data-max-gold="1">Máx</button>
+    </div>
+    <div class="sb-give-row">
+      <span class="sb-give-lbl">🪵</span>
+      <input id="give-wood" type="number" inputmode="numeric" min="0" step="5" value="0" aria-label="Madera a enviar" />
+      <button class="btn small ghost sb-quick" data-add-wood="5">+5</button>
+      <button class="btn small ghost sb-quick" data-add-wood="25">+25</button>
+      <button class="btn small ghost sb-quick" data-max-wood="1">Máx</button>
+    </div>
+    <div class="sb-give-actions">
+      <button id="give-send" class="btn small primary">Enviar</button>
+      <button id="give-cancel" class="btn small ghost">Cancelar</button>
+    </div>`;
+}
+
+// valida en cliente (feedback inmediato) y manda el comando; el server revalida.
+function submitGive(): void {
+  const gs = store.game;
+  if (!gs || !giveTarget) return;
+  const gEl = document.getElementById('give-gold') as HTMLInputElement | null;
+  const wEl = document.getElementById('give-wood') as HTMLInputElement | null;
+  const gold = clampInt(gEl?.value ?? '0');
+  const wood = clampInt(wEl?.value ?? '0');
+  if (gold <= 0 && wood <= 0) {
+    toast('Pon una cantidad de 🪙 o 🪵 para enviar');
+    return;
+  }
+  if (gold > myGold(gs) || wood > myWood(gs)) {
+    toast('No te alcanzan los recursos para enviar');
+    return;
+  }
+  net.send({ type: 'cmd', cmd: { kind: 'give', to: giveTarget, gold, wood } });
+  giveTarget = null;
+  renderGiveForm();
+}
+
+// Cablea el panel: el botón 📊 lo abre/cierra (estado recordado en localStorage);
+// ✕ o un toque fuera lo cierran; delegación para 🎁, atajos rápidos y enviar.
+export function initScoreboard(): void {
+  const panel = $('scoreboard-panel');
+  const btn = $('btn-scoreboard');
+  // La tabla REEMPLAZA a los chips de jugadores de la esquina: en escritorio nace
+  // ABIERTA (es el marcador titular); en móvil, cerrada (espacio). El usuario manda
+  // después: su última elección queda en localStorage.
+  const stored = localStorage.getItem('td_scoreboard');
+  const open = stored === null ? window.innerWidth > 700 : stored === '1';
+  panel.hidden = !open;
+  btn.setAttribute('aria-expanded', String(open));
+
+  const setOpen = (v: boolean): void => {
+    panel.hidden = !v;
+    btn.setAttribute('aria-expanded', String(v));
+    localStorage.setItem('td_scoreboard', v ? '1' : '0');
+    if (v) {
+      $('market-panel').hidden = true; // los tres viven arriba: abrir uno cierra los demás
+      $('shop-panel').hidden = true;
+      if (store.game?.latest) renderScoreboard();
+    } else {
+      giveTarget = null;
+      renderGiveForm();
+    }
+  };
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setOpen(panel.hidden);
+  });
+  $('scoreboard-close').addEventListener('click', (e) => {
+    e.stopPropagation();
+    setOpen(false);
+  });
+  // clic dentro no cierra. A diferencia del mercado/tienda, la tabla es un
+  // componente PERSISTENTE del HUD (reemplaza a los chips): tocar el mapa NO la
+  // cierra — solo 📊, ✕… salvo que el formulario de regalo esté abierto, que sí
+  // se cancela al tocar fuera (comportamiento de formulario).
+  panel.addEventListener('click', (e) => e.stopPropagation());
+  document.addEventListener('click', () => {
+    if (!panel.hidden && giveTarget) {
+      giveTarget = null;
+      renderGiveForm();
+    }
+  });
+
+  // delegación de acciones dentro del panel (la tabla se re-renderiza a menudo)
+  panel.addEventListener('click', (e) => {
+    const t = e.target as HTMLElement;
+    const giveEl = t.closest<HTMLElement>('[data-give]');
+    if (giveEl) {
+      giveTarget = giveEl.dataset.give ?? null;
+      renderGiveForm();
+      (document.getElementById('give-gold') as HTMLInputElement | null)?.focus();
+      return;
+    }
+    const gEl = document.getElementById('give-gold') as HTMLInputElement | null;
+    const wEl = document.getElementById('give-wood') as HTMLInputElement | null;
+    const gs = store.game;
+    const addGold = t.closest<HTMLElement>('[data-add-gold]');
+    if (addGold && gEl) {
+      gEl.value = String(clampInt(gEl.value) + Number(addGold.dataset.addGold));
+      return;
+    }
+    const addWood = t.closest<HTMLElement>('[data-add-wood]');
+    if (addWood && wEl) {
+      wEl.value = String(clampInt(wEl.value) + Number(addWood.dataset.addWood));
+      return;
+    }
+    if (t.closest('[data-max-gold]') && gEl && gs) {
+      gEl.value = String(myGold(gs));
+      return;
+    }
+    if (t.closest('[data-max-wood]') && wEl && gs) {
+      wEl.value = String(myWood(gs));
+      return;
+    }
+    if (t.closest('#give-cancel')) {
+      giveTarget = null;
+      renderGiveForm();
+      return;
+    }
+    if (t.closest('#give-send')) submitGive();
+  });
+
+  // Enter dentro del formulario = enviar
+  panel.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.target as HTMLElement).closest('#scoreboard-give')) {
+      e.preventDefault();
+      submitGive();
+    }
+  });
+}
+
+// llamado desde onTick (throttle) para mantener la tabla viva mientras está abierta
+function syncScoreboard(now: number): void {
+  if ($('scoreboard-panel').hidden) return;
+  if (now - lastScoreboardSync < 250) return;
+  lastScoreboardSync = now;
+  renderScoreboard();
 }
 
 // ---------- velocidad ----------
