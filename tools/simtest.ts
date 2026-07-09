@@ -904,6 +904,30 @@ console.log('— F4.1 · Inmunidad mágica: la magia no afecta a un inmune, lo f
   const exNormal = executeResult(false);
   assert(!exImmune.killed && exImmune.hpLeft > 0, `el execute (Cañón de Riel) NO remata a un inmune malherido (queda con ${exImmune.hpLeft.toFixed(0)} hp)`);
   assert(exNormal.killed, 'el execute SÍ remata a un enemigo normal malherido');
+
+  // ---- Ráfaga completa: el multidisparo lanza TODOS sus proyectiles aunque ----
+  // ---- solo quede 1 enemigo (los sobrantes repiten objetivo, round-robin)  ----
+  console.log('— Ráfaga completa: el multidisparo dispara TODO aunque quede un solo enemigo —');
+  function volley(towerType: TowerTypeId, spec: number, ex: number, ey: number): { projs: number; dmg: number } {
+    const st = createGame('sendero', 'endless', 'normal', 558, [{ id: 'p1', name: 'A', color: '#fff' }]);
+    st.nextId = 8000; st.wave = 1; st.waveState = 'active'; st.spawnQueue = []; st.pendingWave = [];
+    const enemy = mkEnemy('brute', { id: 1800, hp: 100000, maxHp: 100000, x: ex, y: ey });
+    st.enemies.push(enemy);
+    st.towers.push(mkTower(towerType, { id: 2800, spec, cx: 5, cy: 1, level: 3, invested: 800 }));
+    stepGame(st, simCtx, []); // la primera andanada sale en este tick
+    const projs = st.projectiles.length;
+    for (let i = 0; i < TICK_RATE * 2; i++) stepGame(st, simCtx, []);
+    const alive = st.enemies.find((e) => e.id === 1800)!;
+    return { projs, dmg: 100000 - alive.hp };
+  }
+  // Bombardeo (mortero, spec 0): 3 bombas; minRange 2 → enemigo a 3 celdas.
+  const mortarVolley = volley('mortar', 0, 5.5, 4.5);
+  assert(mortarVolley.projs === 3, `el Bombardeo lanza sus 3 bombas contra UN solo enemigo (${mortarVolley.projs})`);
+  assert(mortarVolley.dmg >= 300, `las 3 bombas impactan al mismo objetivo (daño ${mortarVolley.dmg.toFixed(0)} ≥ 300)`);
+  // Ballesta Repetidora (arquero, spec 0): 3 saetas. El enemigo va LEJOS (3 celdas):
+  // a 1 celda las saetas impactan dentro del mismo tick y no quedarían en vuelo.
+  const repeaterVolley = volley('archer', 0, 5.5, 4.5);
+  assert(repeaterVolley.projs === 3, `la Ballesta Repetidora dispara sus 3 saetas contra UN solo enemigo (${repeaterVolley.projs})`);
 }
 
 console.log('— F4.1 · Zapador: aturde la torre más cercana (deja de disparar) —');
@@ -1262,12 +1286,13 @@ console.log('— F6.2 · Metralla antiaérea: ×1.5 a voladores, daño normal a 
     for (let i = 0; i < TICK_RATE * 2 && enemy.hp === 100000; i++) stepGame(st, simCtx, []);
     return 100000 - enemy.hp;
   }
-  // Metralla: daño 52, splash. Contra el Coloso (volador, armadura 2):
-  // round(52×1.5) − 2 = 76. Contra el Bruto (tierra, armadura 2): 52 − 2 = 50.
+  // Metralla: daño 52, splash, RÁFAGA de 2 (contra un único objetivo los 2 tiros
+  // le caen al mismo — ráfaga completa). Contra el Coloso (volador, armadura 2):
+  // (round(52×1.5) − 2) × 2 = 152. Contra el Bruto (tierra, armadura 2): (52−2)×2 = 100.
   const vsAir = flakHit('skywhale');
   const vsGround = flakHit('brute');
-  assert(vsAir === 76, `la Metralla hace ×1.5 al Coloso Alado (${vsAir} == 76 por impacto)`);
-  assert(vsGround === 50, `contra tierra el daño es el normal (${vsGround} == 50)`);
+  assert(vsAir === 152, `la Metralla hace ×1.5 al Coloso Alado (${vsAir} == 152: 2 impactos de 76)`);
+  assert(vsGround === 100, `contra tierra el daño es el normal (${vsGround} == 100: 2 impactos de 50)`);
 }
 
 console.log('— F5.5 · Orco mejorable: más tala por nivel, coste en oro, tope —');

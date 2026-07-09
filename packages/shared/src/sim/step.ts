@@ -555,6 +555,11 @@ function fireTower(
       exclude.add(t.id);
       targets.push(t);
     }
+    // RÁFAGA COMPLETA: si hay menos enemigos a tiro que disparos, los sobrantes
+    // se reparten entre los objetivos ya elegidos (round-robin). Un Bombardeo de
+    // 4 bombas lanza SIEMPRE sus 4 bombas aunque solo quede un enemigo.
+    const distinct = targets.length;
+    for (let i = 0; targets.length < shots; i++) targets.push(targets[i % distinct]);
   }
 
   if (projectileKind === 'snipe') {

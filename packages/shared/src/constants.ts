@@ -137,5 +137,5 @@ export const PLAYER_COLORS = [
   '#e57373', // rojo
 ];
 
-export const BALANCE_VERSION = 13; // Lote 3: oleadas INVISIBLES + Sentry detector (los replays guardan la invisibilidad)
+export const BALANCE_VERSION = 14; // ráfaga completa: el multidisparo repite objetivo si hay menos enemigos que disparos
 export const PROTOCOL_VERSION = 1;
