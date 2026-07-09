@@ -28,6 +28,8 @@ import {
   HORDE_LAP_HP_FLOOR,
   HORDE_LAP_HP_LOSS,
   INTERLUDE_SEC,
+  INVISIBLE_EVERY,
+  INVISIBLE_FROM,
   LEAK_WAVE_DIV,
   SHRED_DURATION,
   SHRED_RADIUS,
@@ -1265,7 +1267,7 @@ export function stepGame(
   if (state.tick === 0 && state.mode !== 'horde') {
     events.push({
       e: 'sys',
-      msg: '🛡 Las oleadas múltiplos de 5 (desde la 10) son INMUNES a la magia: ten daño físico de reserva. ☠ Los jefes llegan cada 10 (la Quimera voladora en la 15/25/35). 👁 Algunas oleadas son INVISIBLES: compra un Sentry en la 🛒 Tienda para revelarlas.',
+      msg: `🛡 Las oleadas múltiplos de 5 (desde la 10) son INMUNES a la magia: ten daño físico de reserva. ☠ Los jefes llegan cada 10 (la Quimera voladora en la 15/25/35). 👁 Las oleadas INVISIBLES llegan cada ${INVISIBLE_EVERY} desde la ${INVISIBLE_FROM}: compra un Sentry en la 🛒 Tienda ANTES de la ${INVISIBLE_FROM} para revelarlas.`,
     });
   }
   if (state.tick === 0) {
