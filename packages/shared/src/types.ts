@@ -222,6 +222,13 @@ export interface EnemyState {
   lastWpIdx: number; // Behemot: último waypoint cruzado (para aturdir una vez por esquina)
   // --- F4.2 ---
   armorShredUntil: number; // tick hasta el que su armadura efectiva está a la MITAD (shred del Obús/Metralla II). 0 = sin shred
+  // --- ORO DE ASISTENCIA (co-op) · AL FINAL ---
+  // Daño APLICADO acumulado por cada jugador contra este enemigo (playerId → daño; se
+  // guarda el DUEÑO de la torre fuente EN EL MOMENTO del golpe, NO el towerId — la torre
+  // puede venderse antes de la muerte). Lo alimentan damageEnemy (impactos/splash/línea/
+  // trampa/barril) y el tick de veneno (por poisonSrc). Al morir, killEnemy busca aquí al
+  // mayor dañador para el oro de asistencia. Determinista: acumulación en orden estable.
+  dmgBy: Record<string, number>;
 }
 
 export interface TowerState {
@@ -442,4 +449,8 @@ export type GameEvent =
   | { e: 'reject'; playerId: string; reason: string }
   | { e: 'boss'; name: string }
   | { e: 'gameover'; victory: boolean }
-  | { e: 'sys'; msg: string };
+  | { e: 'sys'; msg: string }
+  // ORO DE ASISTENCIA (co-op): el mayor dañador de un enemigo (≥35% de su maxHp) cobra
+  // un extra al morir este SI no fue quien dio el golpe final. `player` = playerId del
+  // asistente; `gold` = oro cobrado. El cliente pinta "+N 🤝" en su color.
+  | { e: 'assist'; x: number; y: number; gold: number; player: string };
