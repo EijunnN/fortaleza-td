@@ -18,6 +18,10 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getEleme
 // la repetición de la partida que acaba de terminar (para "🎬 Ver repetición")
 let lastReplay: ReplayData | null = null;
 
+// código de sala si esta carga vino de un enlace «continuar en otro dispositivo»
+// (?rt=…): permite explicar el resultado del join (retomado vs espectador).
+let continueLinkCode: string | null = null;
+
 // ---------- cuenta regresiva (inicio de partida / reanudación) ----------
 // El servidor manda `countdown` con los segundos; el cliente los muestra en
 // grande N..1. El arranque/reanudación real lo dispara el servidor al llegar a 0
@@ -303,6 +307,17 @@ function wireNet(): void {
     // poder recuperar la identidad si el móvil pierde el sessionStorage (NUNCA
     // al entrar de espectador: pisaría el respaldo bueno del jugador)
     if (!msg.spectator) saveRoomToken(msg.code);
+    // ¿Venimos de un enlace «continuar en otro dispositivo»? El server no roba
+    // sesiones VIVAS: si el dispositivo original seguía conectado, aquí se entra
+    // de espectador — explícalo y di cómo retomar (cerrar allá + recargar aquí).
+    if (continueLinkCode === msg.code) {
+      continueLinkCode = null;
+      if (msg.spectator) {
+        toast('👁 Tu otro dispositivo sigue conectado: por ahora entras de espectador. CIÉRRALO allá y RECARGA aquí para retomar tu sitio', 'info');
+      } else {
+        toast('📱 Sesión retomada en este dispositivo', 'info');
+      }
+    }
     // a partir de ahora, cualquier reconexión se une a esta sala por su código
     net.setReconnect(wsPathJoin(msg.code), {
       type: 'join_room',
@@ -647,10 +662,13 @@ function wireHudButtons(): void {
   $('btn-continue-device').addEventListener('click', (e) => {
     e.stopPropagation();
     const url = `${location.origin}${location.pathname}?rt=${encodeURIComponent(store.token)}#${store.roomCode}`;
-    const showFallback = () => window.prompt('Copia este enlace y ábrelo en el otro dispositivo:', url);
+    // El servidor NO roba sesiones vivas: si el enlace se abre con esta pestaña aún
+    // conectada, el otro dispositivo entra de espectador. Hay que DECIRLO aquí.
+    const showFallback = () =>
+      window.prompt('Copia este enlace. Luego CIERRA el juego aquí y ábrelo en el otro dispositivo:', url);
     if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText(url).then(
-        () => toast('📱 Enlace copiado — ábrelo en el otro dispositivo', 'info'),
+        () => toast('📱 Enlace copiado. CIERRA el juego aquí y ábrelo en el otro dispositivo para retomar tu sitio', 'info'),
         showFallback,
       );
     } else {
@@ -760,7 +778,10 @@ function wireHudButtons(): void {
   const rt = new URLSearchParams(location.search).get('rt');
   if (rt) {
     const hashCode = location.hash.replace('#', '').trim().toUpperCase();
-    if (hashCode.length === 4) seedRoomPrevToken(hashCode, rt);
+    if (hashCode.length === 4) {
+      seedRoomPrevToken(hashCode, rt);
+      continueLinkCode = hashCode; // para explicar el resultado al entrar (ver room_joined)
+    }
     history.replaceState(null, '', location.pathname + location.hash);
   }
 }
