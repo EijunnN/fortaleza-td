@@ -19,6 +19,7 @@ let limiter: DynamicsCompressorNode | null = null; // evita clipping en oleadas 
 let sfxGain: GainNode | null = null; // volumen de efectos
 let musicGain: GainNode | null = null; // volumen de música (preparado para F3.1)
 let reverbSend: GainNode | null = null; // envío a la reverb global (F6)
+let musicRevGate: GainNode | null = null; // compuerta música→reverb (sigue el slider de música)
 const lastPlayed = new Map<string, number>();
 
 // ---------- límite de voces simultáneas ----------
@@ -106,12 +107,30 @@ function ensureCtx(): AudioContext | null {
       const sfxToRev = ctx.createGain();
       sfxToRev.gain.value = 0.12;
       sfxGain.connect(sfxToRev).connect(reverbSend);
+      // Compuerta del envío de la MÚSICA a la reverb: ese envío entra a la cadena
+      // ANTES de musicGain, así que sin esto el slider de música a 0 dejaba
+      // sonando la cola reverberada de la música (bug real reportado). La
+      // compuerta sigue el valor del slider; el mute la corta igual (master=0).
+      musicRevGate = ctx.createGain();
+      musicRevGate.gain.value = store.musicVol;
+      musicRevGate.connect(reverbSend);
+      // MUTE de verdad: silenciar TODO (sfx + música + reverb) moviendo el
+      // master. Respeta el estado persistido también al crear el contexto.
+      master.gain.value = store.muted ? 0 : 1;
     } catch {
       return null;
     }
   }
   if (ctx.state === 'suspended') void ctx.resume();
   return ctx;
+}
+
+// El botón 🔇 llama aquí: además del gate de los SFX (canPlay), el master baja a 0
+// para callar TAMBIÉN la música y la reverb ya en vuelo. Antes el mute solo
+// bloqueaba los sfx nuevos y la música seguía sonando (bug real reportado).
+export function setMuted(m: boolean): void {
+  store.muted = m;
+  if (ctx && master) master.gain.setTargetAtTime(m ? 0 : 1, ctx.currentTime, 0.015);
 }
 
 // Impulso de reverberación sintético: ruido estéreo con decaimiento exponencial
@@ -132,6 +151,13 @@ function makeImpulse(ac: AudioContext, dur: number, decay: number): AudioBuffer 
 // Entrada del envío de reverb global (null si el audio aún no existe).
 export function getReverbSend(): GainNode | null {
   return reverbSend;
+}
+
+// Entrada del envío de reverb para la MÚSICA: pasa por la compuerta que sigue el
+// slider de música (la entrada cruda de arriba NO lo respeta — es para los SFX).
+export function getMusicReverbSend(): GainNode | null {
+  ensureCtx();
+  return musicRevGate;
 }
 
 // Ganancia base para no saturar el limiter: los volúmenes de usuario (0..1) se
@@ -241,6 +267,9 @@ export function setMusicVolume(v: number): void {
   store.musicVol = clamp01(v);
   localStorage.setItem('td_music_vol', String(Math.round(store.musicVol * 100)));
   if (musicGain && ctx) musicGain.gain.setTargetAtTime(store.musicVol * BASE_MUSIC, ctx.currentTime, 0.01);
+  // la compuerta música→reverb sigue el mismo slider (si no, bajar la música
+  // dejaba sonando su cola reverberada, que entra a la reverb antes del bus)
+  if (musicRevGate && ctx) musicRevGate.gain.setTargetAtTime(store.musicVol, ctx.currentTime, 0.01);
 }
 
 // El nodo de música lo consumirá F3.1; se expone para no reconstruir el grafo.

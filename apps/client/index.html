@@ -166,15 +166,17 @@
         </div>
         <div class="hud-group">
           <button id="btn-callwave" class="btn small primary" hidden>⚔️ ¡Ya! <span id="callwave-timer"></span></button>
-          <button id="btn-ping" class="btn small ghost" title="Marcar un punto para tu equipo (ALT+clic, mantener pulsado el mapa, o arma este botón)">📍</button>
-          <button id="btn-scoreboard" class="btn small ghost" title="Tabla de jugadores: oro, madera, daño y bajas de la partida" aria-haspopup="true" aria-expanded="false">📊</button>
-          <button id="btn-shop" class="btn small ghost" title="Tienda: items especiales (Sentry para revelar invisibles)" aria-haspopup="true" aria-expanded="false">🛒</button>
-          <button id="btn-guide" class="btn small ghost" title="Guía: enemigos, élites y fusiones">📖</button>
-          <button id="btn-minimap" class="btn small ghost" title="Mostrar/ocultar el minimapa">🗺</button>
+          <!-- .blabel: texto legible del botón — visible en escritorio, oculto en
+               móvil por CSS (que en pantalla chica los iconos ya luchan por sitio) -->
+          <button id="btn-ping" class="btn small ghost" title="Marcar un punto para tu equipo (ALT+clic, mantener pulsado el mapa, o arma este botón)">📍<span class="blabel">Ping</span></button>
+          <button id="btn-scoreboard" class="btn small ghost" title="Tabla de jugadores: oro, madera, daño y bajas de la partida" aria-haspopup="true" aria-expanded="false">📊<span class="blabel">Jugadores</span></button>
+          <button id="btn-shop" class="btn small ghost" title="Tienda: items especiales (Sentry para revelar invisibles)" aria-haspopup="true" aria-expanded="false">🛒<span class="blabel">Tienda</span></button>
+          <button id="btn-guide" class="btn small ghost" title="Guía: enemigos, élites y fusiones">📖<span class="blabel">Guía</span></button>
+          <button id="btn-minimap" class="btn small ghost" title="Mostrar/ocultar el minimapa">🗺<span class="blabel">Minimapa</span></button>
           <button id="btn-speed" class="btn small ghost" hidden>▶ x1</button>
-          <button id="btn-pause" class="btn small ghost" hidden>⏸</button>
-          <button id="btn-mute" class="btn small ghost">🔊</button>
-          <button id="btn-settings" class="btn small ghost" title="Ajustes de sonido" aria-haspopup="true" aria-expanded="false">⚙</button>
+          <button id="btn-pause" class="btn small ghost" hidden>⏸<span class="blabel">Pausa</span></button>
+          <button id="btn-mute" class="btn small ghost" title="Silenciar todo (efectos y música)"><span id="mute-icon">🔊</span><span class="blabel">Sonido</span></button>
+          <button id="btn-settings" class="btn small ghost" title="Ajustes de sonido" aria-haspopup="true" aria-expanded="false">⚙<span class="blabel">Ajustes</span></button>
         </div>
       </div>
 

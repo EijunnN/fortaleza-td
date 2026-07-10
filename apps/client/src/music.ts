@@ -25,7 +25,7 @@
 //       · tension (overlay, pocas vidas) → tinte disonante encima de lo que suene.
 //
 // `Math.random` aquí es legítimo: es SOLO cliente/audio, no la simulación.
-import { getMusicBus, getReverbSend, onAudioUnlock } from './audio.js';
+import { getMusicBus, getMusicReverbSend, onAudioUnlock } from './audio.js';
 
 // ---------- teoría musical ----------
 // F6 · Rediseño "Celeste" (Lena Raine): la calidez no viene de tríadas planas
@@ -157,8 +157,10 @@ function buildGraph(ac: AudioContext, out: GainNode): void {
 
   // F6 · envío generoso a la REVERB GLOBAL: el "aire" Celeste. La percusión y el
   // bajo van casi secos (los manda chorusIn igual, pero la porción es del bus
-  // completo y queda equilibrada por el nivel del envío).
-  const rev = getReverbSend();
+  // completo y queda equilibrada por el nivel del envío). Va por la COMPUERTA de
+  // música (sigue el slider): el envío crudo entra a la reverb antes de musicGain
+  // y dejaba la cola sonando con la música a 0.
+  const rev = getMusicReverbSend();
   if (rev) {
     const toRev = ac.createGain();
     toRev.gain.value = 0.34;

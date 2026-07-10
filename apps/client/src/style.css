@@ -84,6 +84,9 @@ html, body {
 }
 .btn.big { width: 100%; padding: 14px; font-size: 1.1rem; margin-top: 14px; }
 .btn.small { padding: 7px 12px; font-size: 0.9rem; }
+/* etiqueta de texto de los botones-icono del HUD: legible en escritorio (que no
+   haya que ADIVINAR qué es cada icono); en móvil se oculta por espacio (media query) */
+.blabel { margin-left: 6px; font-size: 0.82rem; font-weight: 600; }
 .btn.ghost { background: rgba(34, 44, 68, 0.6); border-color: var(--border); }
 /* acción destructiva/de salida (abandonar partida): rojo tenue con borde */
 .btn.danger { background: rgba(239, 83, 80, 0.14); border-color: rgba(239, 83, 80, 0.55); color: var(--danger); }
@@ -1493,6 +1496,7 @@ html, body {
      stats hasta cortar el chip 🪵 justo en el interludio (cuando se compra) */
   #callwave-timer .cw-bonus { display: none; }
   .btn.small { padding: 6px 9px; font-size: 0.82rem; }
+  .blabel { display: none; } /* en móvil los iconos van solos (espacio) */
   /* menos botones en pantallas chicas: el minimapa no necesita toggle (se usa
      tocándolo directo) y la Guía 📖 vive en la pausa — ahora cualquiera puede
      pausar, así que sigue al alcance de todos */

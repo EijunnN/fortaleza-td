@@ -8,7 +8,7 @@ import { initBestiary } from './bestiary.js';
 import { applySpectatorUI, buildTowerBar, hidePanel, initMarket, initScoreboard, initShop, onTick, toast, addChat, refreshPanel, syncSpeedButton, syncTowerBar, toggleSpectatorTowers } from './hud.js';
 import { hideEnd, homeError, initHome, initLobby, renderLobby, showEnd, switchScreen } from './screens.js';
 import { beam, burst, clearParticles, floatText, fx, line, ring } from './particles.js';
-import { sfx, setSfxVolume, setMusicVolume, unlockAudio } from './audio.js';
+import { sfx, setMuted, setSfxVolume, setMusicVolume, unlockAudio } from './audio.js';
 import { startMusic, setMusicState, pauseMusic, resumeMusic, stopMusic, type MusicState } from './music.js';
 import { initReplayHome, saveReplay, setReplayEventSink, startReplay } from './replay.js';
 import type { ReplayData } from '@td/shared';
@@ -607,10 +607,14 @@ function wireHudButtons(): void {
   });
 
   const muteBtn = $('btn-mute');
-  const syncMute = () => (muteBtn.textContent = store.muted ? '🔇' : '🔊');
+  // solo se toca el ICONO (span #mute-icon): escribir textContent en el botón
+  // destruiría la etiqueta de texto de escritorio (.blabel)
+  const syncMute = () => ($('mute-icon').textContent = store.muted ? '🔇' : '🔊');
   syncMute();
   muteBtn.addEventListener('click', () => {
-    store.muted = !store.muted;
+    // setMuted baja el MASTER a 0: calla también la música y la reverb en vuelo
+    // (antes solo se bloqueaban los sfx nuevos y la música seguía sonando)
+    setMuted(!store.muted);
     localStorage.setItem('td_muted', store.muted ? '1' : '0');
     syncMute();
   });
