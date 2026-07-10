@@ -11,9 +11,8 @@
     {
       "name": "client-dev",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["--filter", "@td/client", "dev"],
-      "port": 5173,
-      "autoPort": true
+      "runtimeArgs": ["--filter", "@td/client", "dev", "--port", "5190", "--strictPort"],
+      "port": 5190
     }
   ]
 }

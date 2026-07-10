@@ -1154,14 +1154,14 @@ function drawPings(dt: number): void {
     g.fill();
     g.stroke();
     g.fillStyle = '#10141c';
-    g.font = `bold ${Math.max(9, s * 0.26)}px system-ui, sans-serif`;
+    g.font = `bold ${Math.max(9, s * 0.26)}px system-ui, EmojiFix, sans-serif`;
     g.textAlign = 'center';
     g.textBaseline = 'middle';
     g.fillText('!', x, my);
 
     // nombre de quien lo lanzó
     g.fillStyle = '#fff';
-    g.font = `bold ${Math.max(9, s * 0.22)}px system-ui, sans-serif`;
+    g.font = `bold ${Math.max(9, s * 0.22)}px system-ui, EmojiFix, sans-serif`;
     g.textBaseline = 'bottom';
     g.strokeStyle = 'rgba(0,0,0,0.6)';
     g.lineWidth = 3;
@@ -1202,7 +1202,7 @@ function drawSuggestionPing(p: Ping, s: number, now: number): void {
   const label = `${p.name} sugiere: ${TOWERS[type].name}`;
   const ty = toY(cy) - s * 0.28;
   const tx = toX(cx + 0.5);
-  g.font = `bold ${Math.max(9, s * 0.2)}px system-ui, sans-serif`;
+  g.font = `bold ${Math.max(9, s * 0.2)}px system-ui, EmojiFix, sans-serif`;
   g.textAlign = 'center';
   g.textBaseline = 'bottom';
   g.strokeStyle = 'rgba(0,0,0,0.65)';
@@ -1609,7 +1609,7 @@ function drawTowers(gs: GameStore, interp: InterpResult | null, now: number, dt:
       g.fill();
       // contador numérico
       g.fillStyle = '#eceff1';
-      g.font = `bold ${Math.max(8, s * 0.24)}px system-ui, sans-serif`;
+      g.font = `bold ${Math.max(8, s * 0.24)}px system-ui, EmojiFix, sans-serif`;
       g.textAlign = 'center';
       g.textBaseline = 'middle';
       g.strokeStyle = 'rgba(0,0,0,0.7)';
@@ -3623,7 +3623,7 @@ function drawBossBar(boss: { hpFrac: number; name: string }): void {
   roundRect(g, x, y, Math.max(9, w * boss.hpFrac), 9, 4.5);
   g.fill();
   g.fillStyle = '#ffcdd2';
-  g.font = 'bold 12px system-ui, sans-serif';
+  g.font = 'bold 12px system-ui, EmojiFix, sans-serif';
   g.textAlign = 'center';
   g.textBaseline = 'top';
   g.fillText(`☠ ${boss.name}`, x + w / 2, y + 12);
@@ -3843,7 +3843,7 @@ function drawPremoves(gs: GameStore, now: number): void {
       drawTowerArt(towerType, s, 1, now / 1000, { angle: -Math.PI / 2, recoil: 0, flash: 0 }, '#4fc3f7', false);
       g.restore();
       g.fillStyle = '#4fc3f7';
-      g.font = `bold ${Math.max(11, s * 0.34)}px system-ui, sans-serif`;
+      g.font = `bold ${Math.max(11, s * 0.34)}px system-ui, EmojiFix, sans-serif`;
       g.fillText('⏳', toX(cx) + s / 2, toY(cy) + s / 2);
     } else {
       const t = gs.latest?.towers.find((tt) => tt[0] === pm.towerId);
@@ -3858,7 +3858,7 @@ function drawPremoves(gs: GameStore, now: number): void {
       g.stroke();
       g.setLineDash([]);
       g.fillStyle = '#ffd54f';
-      g.font = `bold ${Math.max(10, s * 0.3)}px system-ui, sans-serif`;
+      g.font = `bold ${Math.max(10, s * 0.3)}px system-ui, EmojiFix, sans-serif`;
       g.fillText('⏳⬆', toX(cx + 0.5), toY(cy) - s * 0.12);
     }
   }

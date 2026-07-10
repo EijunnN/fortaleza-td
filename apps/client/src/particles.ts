@@ -208,7 +208,7 @@ export function drawParticles(
       }
       case 'text': {
         g.fillStyle = p.color;
-        g.font = `bold ${p.size}px system-ui, sans-serif`;
+        g.font = `bold ${p.size}px system-ui, EmojiFix, sans-serif`;
         g.textAlign = 'center';
         g.textBaseline = 'alphabetic'; // otros dibujantes (barra de jefe) lo cambian
         g.strokeStyle = 'rgba(0,0,0,0.7)';
