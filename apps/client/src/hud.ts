@@ -1220,8 +1220,15 @@ export function onTick(snap: Snap): void {
     btn.hidden = false;
     const bonus = snap.interludeSec * CALL_WAVE_GOLD_PER_SEC;
     // el bonus va en su propio span: en móvil se oculta por CSS para que el
-    // botón no estruje la fila de stats (dejaría el chip 🪵 fuera de pantalla)
-    $('callwave-timer').innerHTML = `${snap.interludeSec}s <span class="cw-bonus">+🪙${bonus}</span>`;
+    // botón no estruje la fila de stats (dejaría el chip 🪵 fuera de pantalla).
+    // Solo reescribir si CAMBIÓ (cambia 1 vez/s, no 15): reescribir cada tick
+    // destruía el span bajo el dedo y el click en «¡Ya!» se perdía a veces.
+    const timerEl = $('callwave-timer');
+    const timerHtml = `${snap.interludeSec}s <span class="cw-bonus">+🪙${bonus}</span>`;
+    if (timerEl.dataset.h !== timerHtml) {
+      timerEl.dataset.h = timerHtml;
+      timerEl.innerHTML = timerHtml;
+    }
   } else {
     btn.hidden = true;
   }
@@ -1406,21 +1413,30 @@ const SHOP_ITEMS: ShopItem[] = [
 
 let lastShopSync = 0;
 
-// (re)construye la rejilla de items con costes y estado (throttle desde onTick).
+// Construye la rejilla UNA sola vez (estructura estática) y en cada sync solo
+// actualiza clases EN SITIO. Antes reescribía el innerHTML cada 250ms con la
+// tienda abierta: el botón se destruía bajo el dedo y el click se perdía (bug
+// real reportado: "hay que hacer varios clics para comprar el Sentry").
 export function renderShop(): void {
   const gs = store.game;
   if (!gs) return;
+  const grid = $('shop-grid');
+  if (grid.childElementCount !== SHOP_ITEMS.length) {
+    grid.innerHTML = SHOP_ITEMS.map((it) => {
+      const cost = TOWERS[it.towerType].levels[0].cost;
+      return `<button class="shop-item" data-item="${it.towerType}">
+        <span class="shop-icon">${it.icon}</span>
+        <span class="shop-info"><b>${it.name}</b><span class="shop-desc">${it.desc}</span></span>
+        <span class="shop-cost">🪙${cost}</span>
+      </button>`;
+    }).join('');
+  }
   const gold = myGold(gs);
-  $('shop-grid').innerHTML = SHOP_ITEMS.map((it) => {
-    const cost = TOWERS[it.towerType].levels[0].cost;
-    const poor = gold < cost;
-    const placing = gs.selection?.kind === 'placing' && gs.selection.towerType === it.towerType;
-    return `<button class="shop-item${placing ? ' selected' : ''}${poor ? ' poor' : ''}" data-item="${it.towerType}">
-      <span class="shop-icon">${it.icon}</span>
-      <span class="shop-info"><b>${it.name}</b><span class="shop-desc">${it.desc}</span></span>
-      <span class="shop-cost">🪙${cost}</span>
-    </button>`;
-  }).join('');
+  for (const el of grid.querySelectorAll<HTMLElement>('[data-item]')) {
+    const type = el.dataset.item as TowerTypeId;
+    el.classList.toggle('poor', gold < TOWERS[type].levels[0].cost);
+    el.classList.toggle('selected', gs.selection?.kind === 'placing' && gs.selection.towerType === type);
+  }
 }
 
 function syncShop(now: number): void {
@@ -1493,40 +1509,89 @@ function clampInt(v: string): number {
 // (re)construye la tabla; se llama en cada snapshot con el panel abierto (throttle
 // en onTick). El mini-formulario de regalo vive en otro contenedor, así que
 // refrescar la tabla NO pisa lo que el jugador está escribiendo.
+// ¿Hay un dedo/botón presionado sobre la tabla? Mientras dure, NO se reescribe la
+// estructura (destruiría el 🎁 bajo el dedo — mismo bug de clicks comidos que tenía
+// la tienda). Los NÚMEROS se actualizan por textContent, que no destruye nada.
+let sbStructure = '';
+let sbHeld = false;
+let sbHoldWired = false;
+
 export function renderScoreboard(): void {
   const gs = store.game;
   const snap = gs?.latest;
   if (!gs || !snap) return;
+  if (!sbHoldWired) {
+    sbHoldWired = true;
+    $('scoreboard-panel').addEventListener('pointerdown', () => {
+      sbHeld = true;
+    });
+    const release = () => {
+      sbHeld = false;
+    };
+    window.addEventListener('pointerup', release);
+    window.addEventListener('pointercancel', release);
+  }
   const meId = store.playerId;
   const canGive = !store.spectator && !store.replay && snap.players.some((p) => p.id === meId);
-  const rows = snap.players
-    .map((p) => {
-      const info = gs.init.players.find((ip) => ip.id === p.id);
-      const isMe = p.id === meId;
-      const name = escapeHtml(info?.name ?? p.id); // nombre de usuario: SIEMPRE escapado
-      const give =
-        canGive && !isMe
-          ? `<button class="btn small ghost sb-give" data-give="${escapeHtml(p.id)}" aria-label="Enviar recursos a ${name}" title="Enviar oro/madera a ${name}">🎁</button>`
-          : '';
-      return `<tr class="${isMe ? 'sb-me' : ''}${p.connected ? '' : ' offline'}">
+  const body = $('scoreboard-body');
+
+  // ESTRUCTURA (roster/nombres/conexión/permisos): solo se reescribe si cambió de
+  // verdad, y nunca con un dedo presionado. Antes se reescribía TODO cada 250ms
+  // con la tabla abierta y los clicks caían en botones recién destruidos.
+  const structure =
+    snap.players
+      .map((p) => {
+        const info = gs.init.players.find((ip) => ip.id === p.id);
+        return `${p.id}:${info?.name ?? ''}:${info?.color ?? ''}:${p.connected ? 1 : 0}`;
+      })
+      .join('|') + `|give:${canGive ? 1 : 0}|me:${meId}`;
+  if (structure !== sbStructure) {
+    if (sbHeld) return; // reintenta en el próximo sync (250ms)
+    sbStructure = structure;
+    const rows = snap.players
+      .map((p) => {
+        const info = gs.init.players.find((ip) => ip.id === p.id);
+        const isMe = p.id === meId;
+        const name = escapeHtml(info?.name ?? p.id); // nombre de usuario: SIEMPRE escapado
+        const give =
+          canGive && !isMe
+            ? `<button class="btn small ghost sb-give" data-give="${escapeHtml(p.id)}" aria-label="Enviar recursos a ${name}" title="Enviar oro/madera a ${name}">🎁</button>`
+            : '';
+        return `<tr class="${isMe ? 'sb-me' : ''}${p.connected ? '' : ' offline'}">
         <td class="sb-name"><span class="sb-dot" style="background:${info?.color};color:${info?.color}"></span>${name}</td>
-        <td>🪙${p.gold}</td>
-        <td>🪵${p.wood}</td>
-        <td class="sb-dmg">${fmtDmg(p.damage)}</td>
-        <td class="sb-kills">${p.kills}</td>
+        <td data-sb="gold:${p.id}"></td>
+        <td data-sb="wood:${p.id}"></td>
+        <td class="sb-dmg" data-sb="dmg:${p.id}"></td>
+        <td class="sb-kills" data-sb="kills:${p.id}"></td>
         <td>${give}</td>
       </tr>`;
-    })
-    .join('');
-  // pie con las métricas en vivo propias (antes vivían en el chip ⚔ de la esquina,
-  // que esta tabla reemplaza): dps · oro de la oleada · vidas perdidas de la oleada
-  $('scoreboard-body').innerHTML = `<table>
+      })
+      .join('');
+    body.innerHTML = `<table>
     <thead><tr>
       <th class="sb-name">Jugador</th><th>🪙</th><th>🪵</th>
       <th title="Daño total de la partida">⚔️</th><th title="Bajas totales">💀</th><th></th>
     </tr></thead>
     <tbody>${rows}</tbody>
-  </table>${liveStatsHtml(snap)}`;
+  </table><div id="sb-live-slot"></div>`;
+  }
+
+  // VOLÁTILES (cambian cada tick en combate): por textContent, sin destruir nodos.
+  const setCell = (k: string, v: string): void => {
+    const el = body.querySelector<HTMLElement>(`[data-sb="${k}"]`);
+    if (el && el.textContent !== v) el.textContent = v;
+  };
+  for (const p of snap.players) {
+    setCell(`gold:${p.id}`, `🪙${p.gold}`);
+    setCell(`wood:${p.id}`, `🪵${p.wood}`);
+    setCell(`dmg:${p.id}`, fmtDmg(p.damage));
+    setCell(`kills:${p.id}`, String(p.kills));
+  }
+  // pie con las métricas en vivo propias (dps · oro de la oleada · vidas): vive en
+  // su propio slot — reescribirlo no toca ningún botón.
+  const slot = body.querySelector<HTMLElement>('#sb-live-slot');
+  const live = liveStatsHtml(snap);
+  if (slot && slot.innerHTML !== live) slot.innerHTML = live;
 }
 
 // dibuja (o limpia) el mini-formulario de regalo según `giveTarget`. Solo se llama
