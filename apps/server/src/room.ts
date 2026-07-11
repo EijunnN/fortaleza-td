@@ -94,10 +94,14 @@ export class Room {
   // ventana de gracia tras promoteSpectators(): a quien no marque «Listo» a
   // tiempo se le devuelve solo a espectador (ver demoteIdlePromoted)
   private demoteTimer: ReturnType<typeof setTimeout> | null = null;
-  // tokens expulsados por el anfitrión: no pueden volver a entrar a ESTA sala
+  // tokens BANEADOS por el anfitrión: no pueden volver a entrar a ESTA sala
   // (el token vive en el localStorage del navegador; limpiar storage lo evade,
-  // pero cubre el caso real: el expulsado reintentando con el mismo código)
+  // pero cubre el caso real: el baneado reintentando con el mismo código)
   private banned = new Set<string>();
+  // tokens EXPULSADOS (kick): sí pueden volver, pero solo a la zona de
+  // espectadores, pineados (nunca vuelven a jugador salvo que el anfitrión los
+  // traiga con move_to_player, que además los perdona — ver restoreToPlayer)
+  private kicked = new Set<string>();
   private paused = false;
   private speed = 1; // steps de simulación por tick de red (x1/x2/x3)
   // ---- grabación de la repetición (replay) de la partida en curso ----
@@ -119,7 +123,33 @@ export class Room {
   // ---------- gestión de jugadores ----------
 
   addPlayer(name: string, token: string, ws: WebSocket): JoinResult {
-    if (this.banned.has(token)) return { kind: 'error', msg: 'El anfitrión te expulsó de esta sala' };
+    if (this.banned.has(token)) return { kind: 'error', msg: 'El anfitrión te baneó de esta sala' };
+    // EXPULSADO (kick, no ban): puede volver, pero SOLO a la zona de espectadores
+    // y pineado (no se auto-promueve al terminar la partida). Va antes que la
+    // reconexión por token: un expulsado jamás recupera su puesto de jugador solo.
+    if (this.kicked.has(token)) {
+      const kickedSpec = this.spectators.find((s) => s.token === token);
+      if (kickedSpec) {
+        // reconexión del expulsado que ya estaba mirando
+        kickedSpec.ws.close();
+        kickedSpec.ws = ws;
+        kickedSpec.name = (name || kickedSpec.name).slice(0, 16);
+        return { kind: 'spectator', spectator: kickedSpec };
+      }
+      if (this.spectators.length >= MAX_SPECTATORS) {
+        return { kind: 'error', msg: 'Hay demasiados espectadores, intenta luego' };
+      }
+      const spectator: Spectator = {
+        id: `s${this.nextSpectatorNum++}`,
+        token,
+        name: (name || 'Espectador').slice(0, 16),
+        ws,
+        pinned: true,
+      };
+      this.spectators.push(spectator);
+      this.emptySince = null;
+      return { kind: 'spectator', spectator };
+    }
     // un slot ABANDONADO nunca se reclama por token: quien se fue voluntariamente
     // no vuelve a jugar esta partida (cae al camino de espectador más abajo).
     const existing = this.players.find((p) => p.token === token && !p.abandoned);
@@ -547,8 +577,11 @@ export class Room {
 
   // El anfitrión trae de vuelta a un espectador (pineado o no) como jugador del
   // lobby. Falla en silencio si la sala está llena o no hay partida en el lobby.
+  // Sin fallback de gracia: si el restaurado nunca marca «Listo», el anfitrión
+  // puede volver a moverlo a espectadores a mano (fue su decisión traerlo).
   private restoreToPlayer(spectator: Spectator): void {
     this.spectators = this.spectators.filter((s) => s !== spectator);
+    this.kicked.delete(spectator.token); // traerlo de vuelta lo perdona del kick
     const isHost = this.players.length === 0;
     const player: RoomPlayer = {
       id: spectator.id,
@@ -610,15 +643,52 @@ export class Room {
         if (this.game && !this.game.over) break; // expulsar solo en el lobby
         const target = this.players.find((p) => p.id === msg.playerId);
         if (!target || target.id === player.id) break;
-        this.systemMsg(`${target.name} fue expulsado por el anfitrión`);
+        this.systemMsg(`${target.name} fue expulsado por el anfitrión (puede volver como espectador)`);
         this.players = this.players.filter((p) => p !== target);
-        this.banned.add(target.token); // expulsado = no puede volver a esta sala
+        this.kicked.add(target.token); // expulsado = si vuelve, solo de espectador (ver addPlayer)
         try {
           target.ws?.close(KICK_CODE, 'kicked');
         } catch {
           // ignore
         }
         this.broadcastLobby();
+        break;
+      }
+
+      // BANEAR: como expulsar, pero el token ya no puede volver a entrar de
+      // ninguna forma. Funciona sobre jugadores Y sobre espectadores (un troll
+      // en la zona de espectadores también se banea desde ahí).
+      case 'ban_player': {
+        if (!player.isHost) {
+          this.send(player, { type: 'error', msg: 'Solo el anfitrión puede banear' });
+          break;
+        }
+        if (this.game && !this.game.over) break; // banear solo en el lobby
+        const target = this.players.find((p) => p.id === msg.playerId);
+        if (target && target.id !== player.id) {
+          this.systemMsg(`${target.name} fue baneado por el anfitrión`);
+          this.players = this.players.filter((p) => p !== target);
+          this.banned.add(target.token);
+          try {
+            target.ws?.close(KICK_CODE, 'banned');
+          } catch {
+            // ignore
+          }
+          this.broadcastLobby();
+          break;
+        }
+        const spec = this.spectators.find((s) => s.id === msg.playerId);
+        if (spec) {
+          this.systemMsg(`${spec.name} fue baneado por el anfitrión`);
+          this.spectators = this.spectators.filter((s) => s !== spec);
+          this.banned.add(spec.token);
+          try {
+            spec.ws.close(KICK_CODE, 'banned');
+          } catch {
+            // ignore
+          }
+          this.broadcastLobby();
+        }
         break;
       }
 
@@ -630,6 +700,12 @@ export class Room {
         if (this.game && !this.game.over) break; // solo en el lobby
         const target = this.players.find((p) => p.id === msg.playerId);
         if (!target || target.id === player.id) break;
+        // sin socket no hay a quién reclasificar: demoteToSpectator lo dejaría
+        // FUERA de la sala en silencio (ni jugador ni espectador). Rechazar.
+        if (!target.ws) {
+          this.send(player, { type: 'error', msg: `${target.name} está desconectado` });
+          break;
+        }
         this.demoteToSpectator(target, `${target.name} pasó a la zona de espectadores`);
         this.broadcastLobby();
         break;

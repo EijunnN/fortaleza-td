@@ -271,8 +271,13 @@ export type ClientMsg =
   // del socket, igual que `leave_room`/`pause`/`resume`).
   | { type: 'leave' }
   | { type: 'set_settings'; settings: RoomSettings }
-  // el anfitrión expulsa a un jugador de la sala (solo en el lobby)
+  // el anfitrión EXPULSA a un jugador de la sala (solo en el lobby). Expulsar no
+  // banea: puede volver a entrar con el código, pero solo a la ZONA DE
+  // ESPECTADORES (pineado). Para bloquearle la entrada del todo, ver ban_player.
   | { type: 'kick_player'; playerId: string }
+  // el anfitrión BANEA a un jugador o espectador (solo en el lobby): se le saca
+  // de la sala y su token ya no puede volver a entrar de ninguna forma
+  | { type: 'ban_player'; playerId: string }
   // el anfitrión cede la propiedad de la sala a otro jugador conectado (solo en el lobby)
   | { type: 'transfer_host'; playerId: string }
   // el anfitrión mueve a un jugador del lobby a la zona de espectadores (solo en
