@@ -1,12 +1,8 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "fortaleza-td",
+  "name": "td",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-03",
-
-  // Dominio propio (Cloudflare crea el registro DNS + certificado automáticamente).
-  // Se mantiene también la URL *.workers.dev como respaldo.
-  "routes": [{ "pattern": "fortaleza-td.bezenti.com", "custom_domain": true }],
   "workers_dev": true,
 
   // Sirve el cliente compilado (SPA) y deja que el Worker maneje /api/* y /ws.
@@ -30,8 +26,5 @@
     { "tag": "v2", "new_sqlite_classes": ["DirectoryDO"] }
   ],
 
-  "observability": { "enabled": true },
-
-  // Récords (leaderboard) en KV.
-  "kv_namespaces": [{ "binding": "SCORES", "id": "2d8014cf2bfd49ab8a8372c69985ac86" }]
+  "observability": { "enabled": true }
 }
