@@ -250,23 +250,20 @@ export class SandboxRoom {
   private tick(): void {
     if (!this.game || !this.simCtx) return;
     if (this.paused) return;
-    const msPerTick = TICK_MS / this.speed;
     this.tickNum++;
     const prevOver = this.game.over;
     const events = stepGame(this.game, this.simCtx, this.pendingCmds);
+    // grabar comandos en el log de replay (si hay)
+    for (const pc of this.pendingCmds) this.replayLog.push({ t: this.game.tick, kind: 'cmd', playerId: pc.playerId, cmd: pc.cmd });
     this.pendingCmds = [];
     const snap = buildSnap(this.game);
     this.broadcast({ type: 'tick', t: this.game.tick, snap, events });
-    if (!this.game.over && prevOver === null) {
+    // partida terminó AHORA
+    if (this.game.over && !prevOver) {
       const stats = this.buildEndStats();
       this.broadcast({ type: 'game_over', stats, ...(this.replayLog.length > 0 ? { replay: this.buildReplay() } : {}) });
       this.broadcastLobby();
       if (this.interval) { clearInterval(this.interval); this.interval = null; }
-      setTimeout(() => {
-        for (const p of this.players) if (p.ws) this.send(p, { type: 'game_started', init: this.gameInit(p.id) });
-        if (this.interval) clearInterval(this.interval);
-        this.interval = setInterval(() => this.tick(), TICK_MS);
-      }, 2000);
     }
     this.maybeCleanup();
   }
