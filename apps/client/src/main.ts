@@ -676,6 +676,49 @@ function wireHudButtons(): void {
     if (!panel.hidden) closePanel();
   });
 
+  // ---------- hamburguesa móvil ☰ ----------
+  const hamBtn = $('btn-hamburger');
+  const hamMenu = $('hamburger-menu');
+  const closeHam = () => {
+    hamMenu.hidden = true;
+    hamBtn.setAttribute('aria-expanded', 'false');
+  };
+  // mapear botones del menú hamburguesa a los originales
+  const hamMap: [string, string][] = [
+    ['hamburger-ping', 'btn-ping'],
+    ['hamburger-scoreboard', 'btn-scoreboard'],
+    ['hamburger-shop', 'btn-shop'],
+    ['hamburger-guide', 'btn-guide'],
+    ['hamburger-minimap', 'btn-minimap'],
+    ['hamburger-mute', 'btn-mute'],
+    ['hamburger-settings', 'btn-settings'],
+  ];
+  for (const [hamId, origId] of hamMap) {
+    $(hamId).addEventListener('click', (e) => {
+      closeHam();
+      $(origId).click();
+    });
+  }
+  // sincronizar icono de mute en la hamburguesa
+  const syncHamMute = () => {
+    const el = document.getElementById('hamburger-mute-icon');
+    if (el) el.textContent = store.muted ? '🔇' : '🔊';
+  };
+  syncHamMute();
+  // el botón mute original actualiza los dos iconos
+  const _origMute = muteBtn.click;
+  muteBtn.addEventListener('click', () => setTimeout(syncHamMute, 0), true);
+  hamBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = hamMenu.hidden;
+    hamMenu.hidden = !open;
+    hamBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+  hamMenu.addEventListener('click', (e) => e.stopPropagation());
+  document.addEventListener('click', () => {
+    if (!hamMenu.hidden) closeHam();
+  });
+
   // 📱 Continuar en otro dispositivo (issue #6): enlace con el código de sala +
   // el token de reconexión de ESTA pestaña, para retomar la partida en otro
   // navegador/dispositivo sin cuentas. Mismo patrón que copiar el código del

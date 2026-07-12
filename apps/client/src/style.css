@@ -1553,6 +1553,41 @@ html, body {
   #scoreboard-panel { top: 46px; }
 }
 
+/* hamburguesa oculta en escritorio (el móvil la muestra en su @media) */
+#btn-hamburger { display: none; }
+
+/* menú hamburguesa: dropdown flotante con los botones de acción */
+.hamburger-dropdown {
+  position: fixed;
+  top: 54px; right: 8px;
+  background: rgba(12, 16, 26, 0.96);
+  border: 1px solid rgba(44, 56, 84, 0.85);
+  border-radius: 12px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 100;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  min-width: 160px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+}
+.hamburger-dropdown .btn {
+  justify-content: flex-start;
+  padding: 10px 14px;
+  font-size: 0.92rem;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #cfd8dc;
+  gap: 8px;
+}
+.hamburger-dropdown .btn:hover,
+.hamburger-dropdown .btn:active {
+  background: rgba(44, 56, 84, 0.5);
+}
+
 /* pantallas muy bajas (móvil apaisado): compactar todo lo posible */
 @media (max-height: 500px) {
   #hud-top { padding: 4px 8px; }
@@ -1652,4 +1687,11 @@ html, body {
   .replay-controls { gap: 7px; }
   .replay-time { font-size: 0.72rem; }
   .replay-list li { flex-wrap: wrap; }
+}
+
+/* móvil horizontal/tablet: hamburguesa para no estrujar los botones */
+@media (max-width: 900px) {
+  #btn-hamburger { display: inline-flex; }
+  #btn-ping, #btn-scoreboard, #btn-shop, #btn-guide, #btn-minimap,
+  #btn-mute, #btn-settings { display: none; }
 }
