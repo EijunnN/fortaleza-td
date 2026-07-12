@@ -74,13 +74,13 @@ export function setPlacing(towerType: TowerTypeId | null): void {
   if (towerType && gs.map && inputCanvas) {
     const view = getView();
     if (view) {
-      const vw = inputCanvas.clientWidth;
-      const vh = inputCanvas.clientHeight - 54;
-      const cx = Math.floor((vw / 2 - view.ox) / view.scale);
-      const cy = Math.floor((vh / 2 - view.oy) / view.scale);
+      const ch = inputCanvas.clientHeight;
+      const availH = ch - 54 - 106; // PAD_TOP - PAD_BOTTOM
+      const screenX = inputCanvas.clientWidth / 2;
+      const screenY = 54 + availH / 2;
       gs.hoverCell = {
-        cx: Math.max(0, Math.min(gs.map.gridW - 1, cx)),
-        cy: Math.max(0, Math.min(gs.map.gridH - 1, cy)),
+        cx: Math.max(0, Math.min(gs.map.gridW - 1, Math.floor((screenX - view.ox) / view.scale))),
+        cy: Math.max(0, Math.min(gs.map.gridH - 1, Math.floor((screenY - view.oy) / view.scale))),
       };
     }
   } else {
@@ -385,6 +385,11 @@ export function initInput(canvas: HTMLCanvasElement): void {
         gs.hoverCell = cellFromPoint(canvas, e.clientX, e.clientY);
       }
       return;
+    }
+
+    // durante el arrastre en modo colocación: actualizar el fantasma
+    if (gs && gs.selection?.kind === 'placing') {
+      gs.hoverCell = cellFromPoint(canvas, e.clientX, e.clientY);
     }
 
     const dx = e.clientX - p.x;

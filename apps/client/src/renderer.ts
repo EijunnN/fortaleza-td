@@ -3818,9 +3818,10 @@ function drawPlacement(gs: GameStore, now: number): void {
   g.translate(toX(cx) + s / 2, toY(cy) + s / 2);
   const spr = getTowerSprite(type, 1, -1);
   if (spr) {
-    const w = s * 1.15;
+    const w = s * SPRITE_W;
     const h = (spr.naturalHeight / spr.naturalWidth) * w;
-    g.drawImage(spr, -w / 2, -h, w, h);
+    // ancla: misma posición que las torres reales (base en borde inferior)
+    g.drawImage(spr, -w / 2, s * 0.5 - h, w, h);
   } else {
     drawTowerArt(type, s, 1, now / 1000, { angle: -Math.PI / 2, recoil: 0, flash: 0 }, ok ? '#a5d6a7' : '#ef9a9a', false);
   }
