@@ -1,10 +1,12 @@
-// Sandbox — abre el enlace y ves todas las torres disparando.
+// Sandbox — el BOT juega solo, colocas todas las torres y llamas oleadas.
+// Abres el enlace y ENTRAS DIRECTO como espectador a mitad de partida.
 //
-//  1. Crea sala, arranca partida al instante, velocidad x3
-//  2. Coloca minas de oro + TODAS las torres del juego (francotirador incluido)
-//  3. Llama oleadas sin parar
-//  4. Tras la oleada 3 imprime el enlace
-//  5. Abres el enlace → entras de ESPECTADOR directo a la partida
+//  1. Crea sala, arranca partida AL INSTANTE (sin esperar a nadie)
+//  2. Velocidad x3, coloca minas de oro, oleada tras oleada
+//  3. Coloca TODAS las torres del juego (francotirador incluido) entre oleadas
+//  4. Tras la oleada 3, imprime el enlace → entras y ves todo funcionando
+//
+// ⚠️ Mantén esta terminal abierta — NO hagas Ctrl+C.
 //
 // Uso: pnpm dev (otra terminal)  &&  npx tsx tools/sandbox.ts
 
@@ -15,7 +17,7 @@ const NP = Number(process.env.PORT ?? 3000);
 const VP = 5173;
 const ws = new WebSocket(`ws://localhost:${NP}/ws`);
 
-let code = '', wave = 0, idx = 0, printed = false;
+let code = '', wave = 0, idx = 0, linkPrinted = false;
 
 const TOWERS: Record<string, [number, number][]> = {
   archer: [[3,1],[6,7]], cannon: [[6,1],[10,7]], frost: [[9,1],[14,7]],
@@ -26,16 +28,11 @@ const TOWERS: Record<string, [number, number][]> = {
 
 const BANKS: [number, number][] = [[1,9],[3,9],[5,9],[7,9],[9,9],[11,9],[13,9],[17,9]];
 
-// Cola de comandos para espaciar en el tiempo
 const q: (() => void)[] = [];
 let timer: ReturnType<typeof setTimeout> | null = null;
 function flush() {
   if (timer) return;
-  timer = setTimeout(() => {
-    timer = null;
-    const next = q.shift();
-    if (next) { next(); flush(); }
-  }, 80);
+  timer = setTimeout(() => { timer = null; const n = q.shift(); if (n) { n(); flush(); } }, 80);
 }
 
 ws.on('open', () => ws.send(JSON.stringify({
@@ -46,15 +43,17 @@ ws.on('open', () => ws.send(JSON.stringify({
 ws.on('message', (r: Buffer) => {
   const m = JSON.parse(String(r));
 
+  // 1. Recibimos código → ARRANCAR PARTIDA AL TIRO
   if (m.type === 'room_joined') {
     code = m.code;
-    console.log(`\n  🏰 Sala ${code} — arrancando…`);
+    console.log(`\n  🏰 Sala ${code} — arrancando partida…`);
     ws.send(JSON.stringify({ type: 'start_game' }));
     return;
   }
 
+  // 2. Partida iniciada → velocidad x3, minas, oleada 1
   if (m.type === 'game_started') {
-    console.log('  🎮 Partida iniciada, velocidad x3');
+    console.log('  🎮 Velocidad x3 — colocando minas…');
     ws.send(JSON.stringify({ type: 'set_speed', speed: 3 }));
     BANKS.forEach(([cx, cy]) => q.push(() => ws.send(JSON.stringify({ type: 'cmd', cmd: { kind: 'place', towerType: 'bank', cx, cy } }))));
     q.push(() => { console.log('  📢 Oleada 1'); ws.send(JSON.stringify({ type: 'cmd', cmd: { kind: 'call_wave' } })); });
@@ -62,41 +61,38 @@ ws.on('message', (r: Buffer) => {
     return;
   }
 
+  // 3. Tick → en interludio: colocar torres, mejorar minas, llamar siguiente
   if (m.type === 'tick') {
     const s = m.snap;
     if (!s || s.active) return;
 
-    // Colocar 2 torres por oleada
-    const towerTypes = Object.keys(TOWERS);
-    for (let i = 0; i < 2 && idx < towerTypes.length; i++, idx++) {
-      const t = towerTypes[idx];
-      const pos = TOWERS[t][0]; // primera posición
+    // Colocar 2 torres del bot por oleada
+    const types = Object.keys(TOWERS);
+    for (let i = 0; i < 2 && idx < types.length; i++, idx++) {
+      const t = types[idx];
+      const pos = TOWERS[t][0];
       q.push(() => ws.send(JSON.stringify({ type: 'cmd', cmd: { kind: 'place', towerType: t, cx: pos[0], cy: pos[1] } })));
     }
-    if (idx >= towerTypes.length) {
-      // segunda posición de las que tienen
+    if (idx >= types.length && idx < 999) {
       for (const [t, poses] of Object.entries(TOWERS)) {
-        if (poses.length > 1) {
-          q.push(() => ws.send(JSON.stringify({ type: 'cmd', cmd: { kind: 'place', towerType: t, cx: poses[1][0], cy: poses[1][1] } })));
-        }
+        if (poses.length > 1) q.push(() => ws.send(JSON.stringify({ type: 'cmd', cmd: { kind: 'place', towerType: t, cx: poses[1][0], cy: poses[1][1] } })));
       }
-      idx = Infinity;
+      console.log('  ✅ Todas las torres colocadas');
+      idx = 999;
     }
 
-    // Mejorar bancos cada 5 oleadas
-    if (wave > 0 && wave % 5 === 0) {
-      BANKS.forEach(([cx, cy]) => q.push(() => ws.send(JSON.stringify({ type: 'cmd', cmd: { kind: 'upgrade', cx, cy } }))));
-    }
+    // Mejorar minas cada 5 oleadas
+    if (wave > 0 && wave % 5 === 0) BANKS.forEach(([cx, cy]) => q.push(() => ws.send(JSON.stringify({ type: 'cmd', cmd: { kind: 'upgrade', cx, cy } }))));
 
     // Imprimir enlace tras oleada 3
-    if (!printed && wave >= 2 && code) {
-      printed = true;
+    if (!linkPrinted && wave >= 2 && code) {
+      linkPrinted = true;
+      const url = `http://localhost:${VP}/#${code}`;
       console.log('\n═══════════════════════════════════════');
       console.log('  ✅ SANDBOX LISTO');
-      const url = `http://localhost:${VP}/?n=Esp&join=${code}`;
       console.log(`  ${url}`);
-      console.log('  (entras directo como espectador)\n');
-      try { execSync(`xdg-open '${url}'`, { shell: true, stdio: 'ignore', timeout: 3000 }); } catch {} // intenta abrir el navegador
+      console.log('  (abres y entras al juego directo como espectador)\n');
+      try { execSync(`xdg-open '${url}' 2>/dev/null`, { shell: true, stdio: 'ignore', timeout: 2000 }); } catch {}
     }
 
     wave++;
@@ -105,4 +101,5 @@ ws.on('message', (r: Buffer) => {
   }
 });
 
-setTimeout(() => process.exit(0), 10 * 60 * 1000);
+// 10 min de vida (suficiente para varias oleadas)
+setTimeout(() => { console.log('\n  ⏰ Tiempo límite.'); process.exit(0); }, 10 * 60 * 1000);
