@@ -8,6 +8,7 @@
 //
 // Uso: pnpm dev (otra terminal)  &&  npx tsx tools/sandbox.ts
 
+import { execSync } from 'node:child_process';
 import WebSocket from 'ws';
 
 const NP = Number(process.env.PORT ?? 3000);
@@ -92,8 +93,10 @@ ws.on('message', (r: Buffer) => {
       printed = true;
       console.log('\n═══════════════════════════════════════');
       console.log('  ✅ SANDBOX LISTO');
-      console.log(`  http://localhost:${VP}/?n=Esp#${code}`);
+      const url = `http://localhost:${VP}/?n=Esp&join=${code}`;
+      console.log(`  ${url}`);
       console.log('  (entras directo como espectador)\n');
+      try { execSync(`xdg-open '${url}'`, { shell: true, stdio: 'ignore', timeout: 3000 }); } catch {} // intenta abrir el navegador
     }
 
     wave++;
