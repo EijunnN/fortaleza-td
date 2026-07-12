@@ -1,0 +1,51 @@
+name: Deploy to Cloudflare (manual/API)
+
+# Release BAJO DEMANDA. No hay push ni cron: este workflow SOLO corre cuando
+# lo disparas tú, desde la pestaña Actions o por API (workflow_dispatch).
+# Equivale a `pnpm cf:deploy` pero en CI (build del cliente + wrangler deploy).
+#
+# Disparo por API:
+#   curl -X POST \
+#     -H "Authorization: Bearer $GITHUB_TOKEN" \
+#     -H "Accept: application/vnd.github+json" \
+#     https://api.github.com/repos/darwinva97/fortaleza-td/actions/workflows/deploy.yml/dispatches \
+#     -d '{"ref":"main"}'
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-cloudflare
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build client
+        run: pnpm --filter @td/client build
+
+      - name: Deploy Worker to Cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: pnpm --filter @td/worker exec wrangler deploy
