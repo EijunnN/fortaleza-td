@@ -33,7 +33,7 @@ function stageOf(level: number, spec: number): string {
 
 // torres que ya tienen hoja de sprites (el resto cae al vector automáticamente)
 const HAS_SPRITE = new Set<TowerTypeId>([
-  'archer', 'cannon', 'frost', 'poison', 'tesla', 'sniper', 'mortar', 'banner', 'trap',
+  'archer', 'cannon', 'frost', 'poison', 'tesla', 'sniper', 'mortar', 'banner', 'trap', 'flak',
 ]);
 
 export function getTowerSprite(type: TowerTypeId, level: number, spec: number): HTMLImageElement | null {
@@ -54,5 +54,20 @@ export function getPartSprite(name: string): HTMLImageElement | null {
 export function getProjSprite(name: string): HTMLImageElement | null {
   if (!spritesEnabled) return null;
   const img = load(`/sprites/proj_${name}.png`);
+  return img && img.complete && img.naturalWidth > 0 ? img : null;
+}
+
+// ---------- jefes ANIMADOS ----------
+// Cada jefe tiene una hoja de BOSS_FRAMES fotogramas (boss_<tipo>_f0..f5.png,
+// generados por tools/slice-sprites.ts). El renderer pasa un contador entero
+// (tiempo + id) y aquí se reduce al frame en bucle. Fallback: si el tipo no
+// tiene hoja (o aún carga), se devuelve null y el renderer dibuja el vector.
+const BOSS_FRAMES = 6;
+const HAS_BOSS_SPRITE = new Set<string>(['golem', 'chimera', 'behemoth']);
+
+export function getBossSprite(type: string, frame: number): HTMLImageElement | null {
+  if (!spritesEnabled || !HAS_BOSS_SPRITE.has(type)) return null;
+  const f = ((frame % BOSS_FRAMES) + BOSS_FRAMES) % BOSS_FRAMES;
+  const img = load(`/sprites/boss_${type}_f${f}.png`);
   return img && img.complete && img.naturalWidth > 0 ? img : null;
 }

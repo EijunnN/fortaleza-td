@@ -24,7 +24,7 @@ import {
 } from '@td/shared';
 import { store, type GameStore, type SnapFrame } from './store.js';
 import { drawParticles, floatText, updateParticles, fx } from './particles.js';
-import { getTowerSprite, getProjSprite } from './sprites.js';
+import { getTowerSprite, getProjSprite, getBossSprite } from './sprites.js';
 
 // ancho del sprite de torre en celdas (la base ≈ este valor; la estructura sube).
 const SPRITE_W = 1.15;
@@ -38,6 +38,14 @@ const PROJ_BY_TYPE: Partial<Record<TowerTypeId, string>> = {
   poison: 'poison',
   cannon: 'cannonball',
   mortar: 'bomb',
+  flak: 'flakneedle',
+};
+// Corrección de orientación por sprite: el convenio es que el PNG apunte al
+// NORTE, pero la hoja de la Balista se generó apuntando al NORESTE (45°).
+const PROJ_ANGLE_FIX: Record<string, number> = {
+  flakneedle: -Math.PI / 4,
+  flakburst: -Math.PI / 4,
+  flakharpoon: -Math.PI / 4,
 };
 
 // Los emojis siguen siendo el "lenguaje" de iconos del HUD (DOM);
@@ -2902,7 +2910,19 @@ function drawEnemies(interp: InterpResult, now: number): void {
 
     g.save();
     g.translate(x, y);
-    drawEnemyArt(type, def.color, r, t, e.id, bob, s);
+    // JEFES con hoja de animación: 6 fotogramas ciclados por tiempo (~7 fps),
+    // desfasados por id para que dos jefes no marchen sincronizados. Altura
+    // normalizada (la quimera cambia de ANCHO al aletear: escalar por alto
+    // mantiene el cuerpo estable) y pies anclados junto a la sombra. Fallback
+    // al vector de siempre si la hoja no existe o aún carga.
+    const bossSprite = isBoss ? getBossSprite(type, Math.floor(now / 140) + e.id) : null;
+    if (bossSprite) {
+      const bh = r * 3.0;
+      const bw = (bossSprite.naturalWidth / bossSprite.naturalHeight) * bh;
+      g.drawImage(bossSprite, -bw / 2, r * 0.9 - bh, bw, bh);
+    } else {
+      drawEnemyArt(type, def.color, r, t, e.id, bob, s);
+    }
 
     // Lote 3 · DETECTADO (invisible revelado por un Sentry): shimmer sutil —
     // anillo celeste discontinuo que gira, para leer "esto solo lo ves por el Sentry".
@@ -3710,7 +3730,7 @@ function drawProjectiles(interp: InterpResult): void {
       const pw = (psprite.naturalWidth / psprite.naturalHeight) * ph;
       g.save();
       g.translate(x, y);
-      g.rotate(ang + Math.PI / 2);
+      g.rotate(ang + Math.PI / 2 + (PROJ_ANGLE_FIX[pn!] ?? 0));
       g.drawImage(psprite, -pw / 2, -ph / 2, pw, ph);
       g.restore();
       continue;
