@@ -3812,11 +3812,18 @@ function drawPlacement(gs: GameStore, now: number): void {
   g.fillStyle = ok ? `rgba(120,220,120,${pulse})` : `rgba(240,80,80,${pulse})`;
   g.fillRect(toX(cx), toY(cy), s, s);
 
-  // torre fantasma (arte real, semitransparente)
+  // torre fantasma (sprite si existe, si no vector)
   g.save();
   g.globalAlpha = 0.75;
   g.translate(toX(cx) + s / 2, toY(cy) + s / 2);
-  drawTowerArt(type, s, 1, now / 1000, { angle: -Math.PI / 2, recoil: 0, flash: 0 }, ok ? '#a5d6a7' : '#ef9a9a', false);
+  const spr = getTowerSprite(type, 1, -1);
+  if (spr) {
+    const w = s * 1.15;
+    const h = (spr.naturalHeight / spr.naturalWidth) * w;
+    g.drawImage(spr, -w / 2, -h, w, h);
+  } else {
+    drawTowerArt(type, s, 1, now / 1000, { angle: -Math.PI / 2, recoil: 0, flash: 0 }, ok ? '#a5d6a7' : '#ef9a9a', false);
+  }
   g.restore();
 }
 

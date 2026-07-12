@@ -21,6 +21,7 @@ import { installAudioUnlock } from './audio.js';
 // cursor; el flujo de colocación se decide por gesto con e.pointerType, para que
 // en un portátil táctil el dedo use dos toques y el ratón el clic directo
 const hasHover = window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+let inputCanvas: HTMLCanvasElement | null = null;
 
 const PLACE_ERRORS: Record<Exclude<PlacementError, null>, string> = {
   fuera: 'Fuera del mapa',
@@ -69,6 +70,22 @@ export function setPlacing(towerType: TowerTypeId | null): void {
   gs.selection = towerType ? { kind: 'placing', towerType } : null;
   gs.pendingPlace = null;
   gs.focusArmed = false;
+  // centrar la previsualización en el viewport nada más elegir torre
+  if (towerType && gs.map && inputCanvas) {
+    const view = getView();
+    if (view) {
+      const vw = inputCanvas.clientWidth;
+      const vh = inputCanvas.clientHeight - 54;
+      const cx = Math.floor((vw / 2 - view.ox) / view.scale);
+      const cy = Math.floor((vh / 2 - view.oy) / view.scale);
+      gs.hoverCell = {
+        cx: Math.max(0, Math.min(gs.map.gridW - 1, cx)),
+        cy: Math.max(0, Math.min(gs.map.gridH - 1, cy)),
+      };
+    }
+  } else {
+    gs.hoverCell = null;
+  }
   hidePanel();
   syncTowerBar();
 }
@@ -239,17 +256,9 @@ function tapSelect(canvas: HTMLCanvasElement, clientX: number, clientY: number, 
   }
 
   if (gs.selection?.kind === 'placing') {
-    if (mouseLike) {
-      // ratón: clic coloca directamente; con Shift se encadena
-      gs.hoverCell = cell;
-      sendPlace(cell.cx, cell.cy, shiftKey);
-    } else if (gs.pendingPlace && gs.pendingPlace.cx === cell.cx && gs.pendingPlace.cy === cell.cy) {
-      // táctil: segundo toque en la misma celda confirma
-      sendPlace(cell.cx, cell.cy, false);
-    } else {
-      // táctil: primer toque marca la celda (muestra fantasma + burbuja ✓/✕)
-      gs.pendingPlace = cell;
-    }
+    // colocar directamente en el primer toque (antes era dos toques en táctil)
+    gs.hoverCell = cell;
+    sendPlace(cell.cx, cell.cy, shiftKey && mouseLike);
     return;
   }
 
@@ -267,6 +276,7 @@ function tapSelect(canvas: HTMLCanvasElement, clientX: number, clientY: number, 
 }
 
 export function initInput(canvas: HTMLCanvasElement): void {
+  inputCanvas = canvas;
   // Desbloqueo robusto del audio: escucha varios gestos en fase de captura y
   // reintenta resume() hasta que el contexto esté 'running' (ver audio.ts). No
   // usamos `{once}` sobre un único evento porque podía consumirse antes de que
@@ -369,8 +379,11 @@ export function initInput(canvas: HTMLCanvasElement): void {
     const p = pointers.get(e.pointerId);
 
     if (!p) {
-      // movimiento sin botón: solo actualiza el fantasma en dispositivos con hover
-      if (gs && hasHover) gs.hoverCell = cellFromPoint(canvas, e.clientX, e.clientY);
+      // movimiento sin botón: actualiza el fantasma (hover en desktop, también
+      // en móvil cuando estamos colocando una torre)
+      if (gs && (hasHover || gs.selection?.kind === 'placing')) {
+        gs.hoverCell = cellFromPoint(canvas, e.clientX, e.clientY);
+      }
       return;
     }
 
