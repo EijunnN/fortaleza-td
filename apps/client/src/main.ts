@@ -833,20 +833,18 @@ initReplayHome();
 initLoadSaveHome();
 switchScreen('home');
 
-// enlace directo ?n=Nombre[&join=CODE] o ?n=Nombre#CODE: entra a la sala
-// sin pasar por el formulario. `?join=` prevalece sobre el hash.
+// enlace directo ?n=Nombre#SALA: entra a la sala sin pasar por el formulario
 {
-  const params = new URLSearchParams(location.search);
-  const qName = params.get('n');
-  const joinCode = (params.get('join') ?? location.hash.replace('#', '')).trim().toUpperCase();
+  const qName = new URLSearchParams(location.search).get('n');
   if (qName) saveName(qName.slice(0, 16));
-  if (joinCode.length === 4 && store.name) {
-    net.connect(wsPathJoin(joinCode), {
+  const hashCode = location.hash.replace('#', '').trim().toUpperCase();
+  if (hashCode.length === 4 && store.name) {
+    net.connect(wsPathJoin(hashCode), {
       type: 'join_room',
       name: store.name,
       token: store.token,
-      code: joinCode,
-      prevToken: roomPrevToken(joinCode),
+      code: hashCode,
+      prevToken: roomPrevToken(hashCode),
     });
   }
 }
