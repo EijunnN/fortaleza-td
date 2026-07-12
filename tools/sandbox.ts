@@ -2,10 +2,11 @@
 // Tú entras como JUGADOR (aunque la partida ya esté en curso) con 525 🪙
 // y COLOCAS TUS torres — francotirador, lo que quieras.
 //
-//  1. Inicia su propio servidor en :3001 (room.ts intacto)
-//  2. Crea sala, arranca partida al tiro, velocidad x3
-//  3. Coloca minas de oro + TODAS las torres entre oleadas
-//  4. Imprime el enlace → abres (con pnpm dev), unes y entras como JUGADOR
+//  1. Toma el puerto 3000 (mata el servidor Node anterior si existe)
+//  2. Arranca su propio servidor sandbox (room.ts intacto)
+//  3. Crea sala, arranca partida al tiro, velocidad x3
+//  4. Coloca minas de oro + TODAS las torres entre oleadas
+//  5. Imprime el enlace → abres, unes y entras como JUGADOR
 //
 // ⚠️ Mantén esta terminal abiertA — NO hagas Ctrl+C.
 //
@@ -14,8 +15,12 @@
 import { execSync, spawn } from 'node:child_process';
 import WebSocket from 'ws';
 
-// Iniciar servidor sandbox como proceso hijo
-const SB_PORT = 3001;
+// Matar proceso anterior en puerto 3000 si existe
+try { execSync('fuser -k 3000/tcp 2>/dev/null', { stdio: 'ignore' }); } catch {}
+execSync('sleep 2', { stdio: 'ignore' });
+
+// Iniciar servidor sandbox en 3000 (Vite proxyea /ws a 3000)
+const SB_PORT = 3000;
 const VP = 5173;
 const sb = spawn('npx', ['tsx', 'apps/server/src/sandbox-server.ts'], {
   cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'],
@@ -24,9 +29,6 @@ const sb = spawn('npx', ['tsx', 'apps/server/src/sandbox-server.ts'], {
 sb.stdout?.on('data', (d: Buffer) => process.stdout.write(d.toString()));
 sb.stderr?.on('data', (d: Buffer) => process.stderr.write(d.toString()));
 sb.on('exit', () => process.exit(1));
-
-// Dar tiempo al servidor para arrancar
-execSync('sleep 3', { stdio: 'ignore' });
 
 const NP = SB_PORT;
 const ws = new WebSocket(`ws://localhost:${NP}/ws`);
