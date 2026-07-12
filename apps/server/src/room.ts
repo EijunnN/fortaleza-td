@@ -169,9 +169,32 @@ export class Room {
       spec.name = (name || spec.name).slice(0, 16);
       return { kind: 'spectator', spectator: spec };
     }
-    // con la partida en curso, un token nuevo entra como espectador
-    // (la reconexión de los que ya jugaban sí funciona, por token, arriba)
+    // con la partida en curso, un token nuevo entra como JUGADOR si hay sitio
+    // (hasta MAX_PLAYERS). Así el sandbox arranca la partida y luego entras a jugar.
     if (this.game && !this.game.over) {
+      const connected = this.players.filter((p) => p.ws).length;
+      if (connected < MAX_PLAYERS) {
+        const player: RoomPlayer = {
+          id: `p${this.nextPlayerNum++}`,
+          token,
+          name: (name || 'Jugador').slice(0, 16),
+          color: PLAYER_COLORS[(this.nextPlayerNum - 2) % PLAYER_COLORS.length],
+          ws,
+          isHost: false,
+          ready: true,
+        };
+        this.players.push(player);
+        this.emptySince = null;
+        // dar oro inicial al nuevo jugador (el bot ya lleva su propia economía)
+        if (this.game && !this.game.over) {
+          const gs = this.game;
+          const p = gs.players.find((gp) => gp.id === player.id);
+          if (p) p.gold += 525;
+        }
+        this.systemMsg(`${player.name} se unió a la partida`);
+        return { kind: 'player', player };
+      }
+      // sala llena: entra como espectador
       if (this.spectators.length >= MAX_SPECTATORS) return { kind: 'error', msg: 'Hay demasiados espectadores, intenta luego' };
       const spectator: Spectator = {
         id: `s${this.nextSpectatorNum++}`,
@@ -760,17 +783,12 @@ export class Room {
           break;
         }
         if (this.game && !this.game.over) break;
-        if (this.startTimer) break; // ya en cuenta atrás
-        if (!this.allReady()) {
-          this.send(player, { type: 'error', msg: 'Espera a que todos marquen «Listo»' });
+        if (this.startTimer) {
+          // ya en cuenta atrás, ignorar
           break;
         }
-        // cuenta regresiva de 3 s y luego arranca (solo si queda alguien conectado)
-        this.broadcast({ type: 'countdown', kind: 'start', seconds: COUNTDOWN_SEC });
-        this.startTimer = setTimeout(() => {
-          this.startTimer = null;
-          if (this.players.some((p) => p.ws)) this.startGame();
-        }, COUNTDOWN_SEC * 1000);
+        // arrancar directamente, sin cuenta atrás (el sandbox necesita inmediatez)
+        this.startGame();
         break;
 
       case 'chat': {
