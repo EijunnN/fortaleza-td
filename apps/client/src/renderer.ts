@@ -1391,7 +1391,11 @@ function drawTowers(gs: GameStore, interp: InterpResult | null, now: number, dt:
   }
   const alive = new Set<number>();
 
-  for (const tw of snap.towers) {
+  // ordenar torres por fila (Y) para que las de abajo se dibujen encima
+  // y no tapen los cañones/proyectiles de las de arriba.
+  const sortedTowers = [...snap.towers].sort((a, b) => a[3] - b[3] || a[2] - b[2]);
+
+  for (const tw of sortedTowers) {
     const [id, typeIdx, cx, cy, level, ownerIdx] = tw;
     const spec = tw[9] ?? -1;
     const fusionIdx = tw[13] ?? -1;
