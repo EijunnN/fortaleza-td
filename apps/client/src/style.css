@@ -1690,6 +1690,34 @@ html, body {
 }
 
 /* móvil horizontal/tablet: hamburguesa para no estrujar los botones */
+/* botón fullscreen: abajo a la derecha, sobre la barra de torres */
+.btn-fullscreen {
+  position: fixed;
+  right: 64px;
+  bottom: 76px;
+  width: 42px; height: 42px;
+  border: 2px solid rgba(180, 200, 220, 0.5);
+  border-radius: 8px;
+  background: rgba(12, 16, 26, 0.7);
+  color: #b0c4d8;
+  font-size: 1.3rem;
+  font-weight: 700;
+  font-family: system-ui, sans-serif;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 50;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  transition: all 0.15s;
+  line-height: 1;
+}
+.btn-fullscreen:hover { background: rgba(44, 56, 84, 0.6); color: #e8eef5; border-color: rgba(200, 220, 240, 0.7); }
+.btn-fullscreen:active { background: rgba(60, 80, 120, 0.7); transform: scale(0.93); }
+/* cuando está en fullscreen: parece "presionado" */
+.btn-fullscreen.fs-active { background: rgba(44, 56, 84, 0.7); border-color: rgba(120, 200, 255, 0.5); color: #90caf9; transform: scale(0.92); }
+
 @media (max-width: 900px) {
   #btn-hamburger { display: inline-flex; }
   #btn-ping, #btn-scoreboard, #btn-shop, #btn-guide, #btn-minimap,

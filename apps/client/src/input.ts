@@ -527,6 +527,13 @@ export function initInput(canvas: HTMLCanvasElement): void {
       clearSelection();
       return;
     }
+    // F: pantalla completa
+    if (e.key === 'f' || e.key === 'F') {
+      e.preventDefault();
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+      else document.documentElement.requestFullscreen().catch(() => {});
+      return;
+    }
     // combinaciones del navegador (Ctrl+C copiar, Ctrl+V pegar, Alt+…): NO son
     // atajos de juego — sin esto, copiar texto compraba madera.
     if (e.ctrlKey || e.metaKey || e.altKey) return;

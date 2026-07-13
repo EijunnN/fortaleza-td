@@ -719,6 +719,21 @@ function wireHudButtons(): void {
     if (!hamMenu.hidden) closeHam();
   });
 
+  // ---------- botón fullscreen ⛶ ----------
+  const fsBtn = $('btn-fullscreen');
+  const syncFs = () => {
+    fsBtn.classList.toggle('fs-active', !!document.fullscreenElement);
+  };
+  document.addEventListener('fullscreenchange', syncFs);
+  document.addEventListener('webkitfullscreenchange', syncFs);
+  fsBtn.addEventListener('click', () => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    } else {
+      document.documentElement.requestFullscreen().catch(() => {});
+    }
+  });
+
   // 📱 Continuar en otro dispositivo (issue #6): enlace con el código de sala +
   // el token de reconexión de ESTA pestaña, para retomar la partida en otro
   // navegador/dispositivo sin cuentas. Mismo patrón que copiar el código del
