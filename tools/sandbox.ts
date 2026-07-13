@@ -2,25 +2,25 @@
 // Tú entras como JUGADOR (aunque la partida ya esté en curso) con 525 🪙
 // y COLOCAS TUS torres — francotirador, lo que quieras.
 //
-//  1. Toma el puerto 3000 (mata el servidor Node anterior si existe)
-//  2. Arranca su propio servidor sandbox (room.ts intacto)
+//  1. Toma el puerto 8787 (mata el Worker de Cloudflare si existe)
+//  2. Arranca su propio servidor sandbox en 8787 (Vite ya proxyza aquí)
 //  3. Crea sala, arranca partida al tiro, velocidad x3
 //  4. Coloca minas de oro + TODAS las torres entre oleadas
 //  5. Imprime el enlace → abres, unes y entras como JUGADOR
 //
 // ⚠️ Mantén esta terminal abiertA — NO hagas Ctrl+C.
 //
-// Uso: pnpm dev (otra terminal)  &&  npx tsx tools/sandbox.ts
+// Uso: pnpm --filter @td/client dev  &&  npx tsx tools/sandbox.ts
 
 import { execSync, spawn } from 'node:child_process';
 import WebSocket from 'ws';
 
-// Matar proceso anterior en puerto 3000 si existe
-try { execSync('fuser -k 3000/tcp 2>/dev/null', { stdio: 'ignore' }); } catch {}
+// Matar proceso anterior en puerto 8787 (Worker) si existe
+try { execSync('fuser -k 8787/tcp 2>/dev/null', { stdio: 'ignore' }); } catch {}
 execSync('sleep 2', { stdio: 'ignore' });
 
-// Iniciar servidor sandbox en 3000 (Vite proxyea /ws a 3000)
-const SB_PORT = 3000;
+// Iniciar servidor sandbox en 8787 (Vite proxyea /ws a 8787)
+const SB_PORT = 8787;
 const VP = 5173;
 const sb = spawn('npx', ['tsx', 'apps/server/src/sandbox-server.ts'], {
   cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'],
