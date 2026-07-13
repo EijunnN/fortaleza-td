@@ -1,8 +1,12 @@
 // F5 · Directorio de salas públicas: UN solo Durable Object (idFromName 'v1')
-// con la lista en MEMORIA. Las salas públicas se reportan al cambiar de estado
-// y como latido periódico (~10 s, a caballo de los pings de keepalive de sus
+// con la lista en MEMORIA. Las salas se reportan al cambiar de estado y como
+// latido periódico (~10 s, a caballo de los pings de keepalive de sus
 // clientes); las entradas sin latido reciente se PODAN al listar, así el
 // directorio se auto-repara solo si el DO se recicla (sin storage, sin costes).
+//
+// Desde el aviso de despliegue, TODAS las salas activas (también las privadas)
+// laten aquí: `listed` distingue las que salen en la lista pública (/list) de
+// las que solo existen para poder difundirles anuncios (/codes).
 import type { PublicRoomInfo } from '@td/shared';
 
 // sin latido en este tiempo, la entrada se considera muerta (los latidos llegan
@@ -12,6 +16,7 @@ const STALE_MS = 45_000;
 interface Entry {
   info: PublicRoomInfo;
   seen: number;
+  listed: boolean;
 }
 
 export class DirectoryDO {
@@ -21,9 +26,9 @@ export class DirectoryDO {
     const url = new URL(request.url);
 
     if (request.method === 'POST' && url.pathname === '/report') {
-      const info = (await request.json()) as PublicRoomInfo;
+      const info = (await request.json()) as PublicRoomInfo & { listed?: boolean };
       if (info && typeof info.code === 'string' && /^[A-Z]{4}$/.test(info.code)) {
-        this.rooms.set(info.code, { info, seen: Date.now() });
+        this.rooms.set(info.code, { info, seen: Date.now(), listed: info.listed !== false });
       }
       return new Response('ok');
     }
@@ -34,6 +39,20 @@ export class DirectoryDO {
       return new Response('ok');
     }
 
+    // todas las salas activas (públicas Y privadas), para difundir anuncios
+    if (url.pathname === '/codes') {
+      const now = Date.now();
+      const out: string[] = [];
+      for (const [code, e] of this.rooms) {
+        if (now - e.seen > STALE_MS) {
+          this.rooms.delete(code);
+          continue;
+        }
+        out.push(code);
+      }
+      return new Response(JSON.stringify(out), { headers: { 'content-type': 'application/json' } });
+    }
+
     if (url.pathname === '/list') {
       const now = Date.now();
       const out: PublicRoomInfo[] = [];
@@ -42,7 +61,7 @@ export class DirectoryDO {
           this.rooms.delete(code);
           continue;
         }
-        out.push(e.info);
+        if (e.listed) out.push(e.info);
       }
       // lobbies primero (se puede JUGAR), luego las partidas en curso (se mira)
       out.sort((a, b) => Number(a.inGame) - Number(b.inGame) || a.code.localeCompare(b.code));

@@ -31,6 +31,43 @@ export default {
     if (url.pathname === '/api/highscores') return json(await loadScores(env));
     if (url.pathname === '/api/health') return json({ ok: true });
 
+    // Aviso administrativo a TODOS los conectados (lo usa el workflow de deploy
+    // para anunciar «Se desplegará en 1 minuto»). Protegido por el secreto
+    // ADMIN_TOKEN (wrangler secret); sin secreto configurado, la ruta no existe.
+    if (url.pathname === '/api/admin/announce' && request.method === 'POST') {
+      const token = env.ADMIN_TOKEN;
+      const auth = request.headers.get('authorization') ?? '';
+      if (!token || auth !== `Bearer ${token}`) return json({ error: 'no autorizado' }, 401);
+      let text = '';
+      try {
+        const body = (await request.json()) as { text?: string };
+        text = String(body.text ?? '').slice(0, 200).trim();
+      } catch {
+        /* sin cuerpo válido */
+      }
+      if (!text) return json({ error: 'falta text' }, 400);
+      const ns = env.DIRECTORY;
+      if (!ns) return json({ rooms: 0, delivered: 0 });
+      const res = await ns.get(ns.idFromName('v1')).fetch('https://do/codes');
+      const codes = (await res.json()) as string[];
+      let delivered = 0;
+      await Promise.all(
+        codes.map(async (code) => {
+          try {
+            const stub = env.ROOM.get(env.ROOM.idFromName(code));
+            const r = await stub.fetch('https://do/announce', {
+              method: 'POST',
+              body: JSON.stringify({ text }),
+            });
+            if (r.ok) delivered += ((await r.json()) as { delivered: number }).delivered;
+          } catch {
+            /* una sala caída no frena el anuncio al resto */
+          }
+        }),
+      );
+      return json({ rooms: codes.length, delivered });
+    }
+
     // F5 · lista de salas públicas (para la portada). Sin binding → lista vacía.
     if (url.pathname === '/api/rooms') {
       const ns = env.DIRECTORY;

@@ -39,6 +39,7 @@ export interface Env {
   ROOM: DurableObjectNamespace;
   DIRECTORY?: DurableObjectNamespace; // directorio de salas públicas (F5)
   SCORES?: KVNamespace;
+  ADMIN_TOKEN?: string; // secreto (wrangler secret) para /api/admin/announce
 }
 
 interface RoomPlayer {
@@ -235,6 +236,26 @@ export class RoomDO {
       // reanudación arranque en modo turbo (sanitizeSettings lo ignora en horda igual)
       this.settings = sanitizeSettings({ mapId: clean.mapId, mode: clean.mode, difficulty: clean.difficulty, turbo: clean.turbo });
       return new Response('ok');
+    }
+
+    // anuncio administrativo (aviso de despliegue): el Worker ya validó el
+    // ADMIN_TOKEN; aquí solo se difunde a todos los conectados de esta sala.
+    if (url.pathname === '/announce' && request.method === 'POST') {
+      let text = '';
+      try {
+        const body = (await request.json()) as { text?: string };
+        text = String(body.text ?? '').slice(0, 200).trim();
+      } catch {
+        /* cuerpo inválido → text vacío */
+      }
+      if (!text) return new Response('bad text', { status: 400 });
+      const delivered = this.connectedCount();
+      // con autor NO vacío: los mensajes de sistema (from '') solo se pintan en
+      // el killfeed in-game, y este aviso debe verse también en el chat del LOBBY
+      if (delivered > 0) this.broadcast({ type: 'chat', from: '📢 Aviso', color: '#ffb300', text });
+      return new Response(JSON.stringify({ delivered }), {
+        headers: { 'content-type': 'application/json' },
+      });
     }
 
     if (request.headers.get('Upgrade') !== 'websocket') {
@@ -614,16 +635,20 @@ export class RoomDO {
   // Reporta esta sala al directorio (fire-and-forget; jamás bloquea la sala).
   // `force` = cambio de estado real; sin force actúa de LATIDO con throttle de
   // 10 s (lo disparan los pings de keepalive de los clientes y el tick de sim).
+  // TODAS las salas con gente conectada laten (también las privadas): el
+  // directorio necesita conocerlas para difundir los avisos de despliegue.
+  // Solo las públicas con jugadores llevan `listed` y salen en /list.
   private reportPublic(force = false): void {
-    if (!this.initialized || !this.settings.public) return;
+    if (!this.initialized) return;
     if (!force && Date.now() - this.lastDirReport < 10_000) return;
     const stub = this.directoryStub();
     if (!stub) return;
     const connected = this.players.filter((p) => p.ws).length;
-    if (connected === 0) return; // sala sin jugadores conectados: no listar
+    if (this.connectedCount() === 0) return; // sala sin nadie conectado: no reportar
     this.lastDirReport = Date.now();
     const host = this.players.find((p) => p.isHost) ?? this.players[0];
-    const info: PublicRoomInfo = {
+    const info: PublicRoomInfo & { listed: boolean } = {
+      listed: this.settings.public === true && connected > 0,
       code: this.code,
       host: host?.name ?? '',
       mapId: this.settings.mapId,
@@ -1483,6 +1508,10 @@ export class RoomDO {
         break;
       case 'ping':
         this.sendTo(spec.ws, { type: 'pong', t: msg.t });
+        // también late al directorio: una sala en LOBBY con solo espectadores
+        // no tiene ni tick de sim ni pings de jugador que la mantengan viva
+        // en el registro de anuncios
+        this.reportPublic();
         this.checkIdle();
         break;
       // un espectador que se va: cierre limpio del socket (dropSocket lo quita)

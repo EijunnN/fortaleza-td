@@ -1,20 +1,26 @@
 name: Sync upstream & deploy to Cloudflare
 
-# Mantiene este fork SIEMPRE al día con el repo padre (EijunnN/fortaleza-td).
-# Se ejecuta:
-#  - cada 15 min: baja los commits nuevos del padre a este fork
-#  - en cada push a main (tus propios cambios)
-#  - manualmente desde la pestaña Actions (workflow_dispatch)
+# Sincroniza el fork con el repo padre (EijunnN/fortaleza-td) cada 15 min,
+# pero el DESPLIEGUE a Cloudflare es SIEMPRE MANUAL (workflow_dispatch):
 #
-# El deploy a Cloudflare solo ocurre cuando REALMENTE hubo cambios nuevos
-# (o cuando tú haces push / lo lanzas a mano), para no redesplegar en vano.
+#   - desde la web: pestaña Actions → este workflow → «Run workflow»
+#   - con el CLI:   gh workflow run deploy.yml
+#   - con la API:   POST /repos/<owner>/fortaleza-td/actions/workflows/deploy.yml/dispatches
+#                   con body {"ref":"main"}
+#
+# Antes de desplegar, avisa a TODOS los jugadores conectados vía
+# POST /api/admin/announce («Se desplegará en 1 minuto» y luego «10 segundos»)
+# y espera ese minuto para que puedan guardar/terminar la oleada.
 on:
-  push:
-    branches: [main]
   schedule:
     # Cada 15 min, con offset (evita el :00 que GitHub suele retrasar).
     - cron: "5,20,35,50 * * * *"
   workflow_dispatch:
+    inputs:
+      aviso:
+        description: "Avisar a los conectados y esperar 1 minuto antes de desplegar"
+        type: boolean
+        default: true
 
 concurrency:
   group: deploy-cloudflare
@@ -27,8 +33,6 @@ jobs:
   # 1) Sincroniza el fork con el repo padre. Corre SIEMPRE (barato: ~15s).
   sync:
     runs-on: ubuntu-latest
-    outputs:
-      changed: ${{ steps.sync.outputs.changed }}
     steps:
       - name: Checkout fork
         uses: actions/checkout@v4
@@ -40,7 +44,6 @@ jobs:
       # divergencia es .github/ y wrangler.jsonc (aditivos), así que la
       # mezcla es limpia salvo que el upstream toque esas mismas líneas.
       - name: Sync from upstream
-        id: sync
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -51,21 +54,22 @@ jobs:
           AFTER=$(git rev-parse HEAD)
           if [ "$BEFORE" != "$AFTER" ]; then
             git push origin main
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::Sincronizados commits nuevos del upstream."
+            echo "::notice::Sincronizados commits nuevos del upstream (pendientes de deploy manual)."
           else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "::notice::Ya estaba al día con el upstream."
           fi
 
-  # 2) Compila y despliega. Solo si hubo cambios del padre, o si fue push/manual.
+  # 2) Compila, AVISA a los conectados y despliega. SOLO manual (workflow_dispatch).
   deploy:
     needs: sync
-    if: ${{ needs.sync.outputs.changed == 'true' || github.event_name != 'schedule' }}
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout fork
         uses: actions/checkout@v4
+        with:
+          # main YA sincronizado por el job anterior (no el SHA que disparó el run)
+          ref: main
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -84,8 +88,38 @@ jobs:
       - name: Build client
         run: pnpm --filter @td/client build
 
+      # Con el build YA hecho, el aviso de «1 minuto» es de verdad 1 minuto.
+      # `|| echo`: si el worker desplegado aún no tiene el endpoint (primer
+      # deploy) o no responde, el deploy sigue igualmente.
+      - name: Avisar a los jugadores conectados
+        if: ${{ inputs.aviso && secrets.ADMIN_TOKEN != '' }}
+        env:
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+        run: |
+          announce() {
+            curl -fsS -X POST "https://fortaleza-td.bezenti.com/api/admin/announce" \
+              -H "Authorization: Bearer $ADMIN_TOKEN" \
+              -H "content-type: application/json" \
+              -d "{\"text\":\"$1\"}" || echo "::warning::No se pudo enviar el aviso: $1"
+            echo ""
+          }
+          announce "⚠️ Se desplegará una nueva versión en 1 minuto. La conexión se reiniciará un momento."
+          sleep 50
+          announce "⚠️ Se desplegará en 10 segundos…"
+          sleep 10
+
       - name: Deploy Worker to Cloudflare
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: pnpm --filter @td/worker exec wrangler deploy
+
+      # Mantiene el secreto del worker igual al de GitHub: solo hay que
+      # gestionar ADMIN_TOKEN en un sitio (Settings → Secrets del repo).
+      - name: Sincronizar ADMIN_TOKEN en el worker
+        if: ${{ secrets.ADMIN_TOKEN != '' }}
+        env:
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: printf '%s' "$ADMIN_TOKEN" | pnpm --filter @td/worker exec wrangler secret put ADMIN_TOKEN
