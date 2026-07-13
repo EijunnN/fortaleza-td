@@ -1,10 +1,10 @@
-// Sandbox — el BOT juega solo, colocas todas las torres y llamas oleadas.
-// Abres el enlace y ENTRAS DIRECTO como espectador a mitad de partida.
+// Sandbox — el BOT arranca la partida AL INSTANTE, colocas minas y oleadas.
+// Tú entras como JUGADOR (aunque la partida ya esté en curso) con 525 🪙
+// y COLOCAS TUS torres — francotirador, lo que quieras.
 //
-//  1. Crea sala, arranca partida AL INSTANTE (sin esperar a nadie)
-//  2. Velocidad x3, coloca minas de oro, oleada tras oleada
-//  3. Coloca TODAS las torres del juego (francotirador incluido) entre oleadas
-//  4. Tras la oleada 3, imprime el enlace → entras y ves todo funcionando
+//  1. Crea sala, arranca partida al tiro, velocidad x3
+//  2. Coloca minas de oro + TODAS las torres entre oleadas
+//  3. Imprime el enlace → abres, unes y entras como JUGADOR
 //
 // ⚠️ Mantén esta terminal abierta — NO hagas Ctrl+C.
 //
@@ -17,7 +17,7 @@ const NP = Number(process.env.PORT ?? 3000);
 const VP = 5173;
 const ws = new WebSocket(`ws://localhost:${NP}/ws`);
 
-let code = '', wave = 0, idx = 0, linkPrinted = false;
+let code = '', wave = 0, idx = 0;
 
 const TOWERS: Record<string, [number, number][]> = {
   archer: [[3,1],[6,7]], cannon: [[6,1],[10,7]], frost: [[9,1],[14,7]],
@@ -43,17 +43,24 @@ ws.on('open', () => ws.send(JSON.stringify({
 ws.on('message', (r: Buffer) => {
   const m = JSON.parse(String(r));
 
-  // 1. Recibimos código → ARRANCAR PARTIDA AL TIRO
+  // 1. Código → imprimir enlace y arrancar al tiro
   if (m.type === 'room_joined') {
     code = m.code;
-    console.log(`\n  🏰 Sala ${code} — arrancando partida…`);
+    const url = `http://localhost:${VP}/#${code}`;
+    console.log('\n═══════════════════════════════════════');
+    console.log('  🏰 SANDBOX');
+    console.log(`  ${url}`);
+    console.log('  Abre, pon nombre, click "Unirse"');
+    console.log('  ⚠️  NO cierres esta terminal\n');
+    try { execSync(`xdg-open '${url}' 2>/dev/null`, { shell: true, stdio: 'ignore', timeout: 2000 }); } catch {}
+    console.log('  🚀 Arrancando partida…');
     ws.send(JSON.stringify({ type: 'start_game' }));
     return;
   }
 
-  // 2. Partida iniciada → velocidad x3, minas, oleada 1
+  // 2. Partida iniciada
   if (m.type === 'game_started') {
-    console.log('  🎮 Velocidad x3 — colocando minas…');
+    console.log('  🎮 Partida en curso — velocidad x3');
     ws.send(JSON.stringify({ type: 'set_speed', speed: 3 }));
     BANKS.forEach(([cx, cy]) => q.push(() => ws.send(JSON.stringify({ type: 'cmd', cmd: { kind: 'place', towerType: 'bank', cx, cy } }))));
     q.push(() => { console.log('  📢 Oleada 1'); ws.send(JSON.stringify({ type: 'cmd', cmd: { kind: 'call_wave' } })); });
@@ -61,12 +68,11 @@ ws.on('message', (r: Buffer) => {
     return;
   }
 
-  // 3. Tick → en interludio: colocar torres, mejorar minas, llamar siguiente
+  // 4. Tick → colocar torres del bot entre oleadas
   if (m.type === 'tick') {
     const s = m.snap;
     if (!s || s.active) return;
 
-    // Colocar 2 torres del bot por oleada
     const types = Object.keys(TOWERS);
     for (let i = 0; i < 2 && idx < types.length; i++, idx++) {
       const t = types[idx];
@@ -77,23 +83,12 @@ ws.on('message', (r: Buffer) => {
       for (const [t, poses] of Object.entries(TOWERS)) {
         if (poses.length > 1) q.push(() => ws.send(JSON.stringify({ type: 'cmd', cmd: { kind: 'place', towerType: t, cx: poses[1][0], cy: poses[1][1] } })));
       }
-      console.log('  ✅ Todas las torres colocadas');
+      console.log('  ✅ Bot colocó todas sus torres — tú colocas las tuyas');
       idx = 999;
     }
 
     // Mejorar minas cada 5 oleadas
     if (wave > 0 && wave % 5 === 0) BANKS.forEach(([cx, cy]) => q.push(() => ws.send(JSON.stringify({ type: 'cmd', cmd: { kind: 'upgrade', cx, cy } }))));
-
-    // Imprimir enlace tras oleada 3
-    if (!linkPrinted && wave >= 2 && code) {
-      linkPrinted = true;
-      const url = `http://localhost:${VP}/#${code}`;
-      console.log('\n═══════════════════════════════════════');
-      console.log('  ✅ SANDBOX LISTO');
-      console.log(`  ${url}`);
-      console.log('  (abres y entras al juego directo como espectador)\n');
-      try { execSync(`xdg-open '${url}' 2>/dev/null`, { shell: true, stdio: 'ignore', timeout: 2000 }); } catch {}
-    }
 
     wave++;
     if (wave < 50) setTimeout(() => ws.send(JSON.stringify({ type: 'cmd', cmd: { kind: 'call_wave' } })), 1500);
