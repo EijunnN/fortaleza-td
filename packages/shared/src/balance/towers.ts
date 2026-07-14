@@ -355,7 +355,7 @@ export const TOWERS: Record<TowerTypeId, TowerDef> = {
         damage: 480,
         range: 8.5,
         cooldown: 3.0,
-        projectileSpeed: 3,
+        projectileSpeed: 9,
         pierceArmor: true,
         execute: 0.15,
         rank2: {
@@ -366,7 +366,7 @@ export const TOWERS: Record<TowerTypeId, TowerDef> = {
           damage: 620,
           range: 9.0,
           cooldown: 2.9,
-          projectileSpeed: 3,
+          projectileSpeed: 9,
           execute: 0,
           executeCurrent: 0.75,
         },
@@ -379,7 +379,7 @@ export const TOWERS: Record<TowerTypeId, TowerDef> = {
         damage: 150,
         range: 7.0,
         cooldown: 1.3,
-        projectileSpeed: 3,
+        projectileSpeed: 9,
         pierceArmor: true,
         rank2: {
           // *Explorador II*: cadencia y daño superiores, sin perder alcance.
@@ -388,7 +388,7 @@ export const TOWERS: Record<TowerTypeId, TowerDef> = {
           damage: 260,
           range: 7.5,
           cooldown: 1.1,
-          projectileSpeed: 3,
+          projectileSpeed: 9,
         },
       },
     ],
