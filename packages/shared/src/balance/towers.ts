@@ -339,12 +339,12 @@ export const TOWERS: Record<TowerTypeId, TowerDef> = {
     hotkey: '6',
     targetsAir: true,
     targetsGround: true,
-    projectileKind: 'snipe',
+    projectileKind: 'bullet',
     attackType: 'perforante',
     levels: [
-      { cost: 130, damage: 60, range: 5.5, cooldown: 3.2, pierceArmor: true },
-      { cost: 195, damage: 115, range: 6.5, cooldown: 3.0, pierceArmor: true },
-      { cost: 310, damage: 210, range: 7.5, cooldown: 2.8, pierceArmor: true },
+      { cost: 130, damage: 60, range: 5.5, cooldown: 3.2, projectileSpeed: 8, pierceArmor: true },
+      { cost: 195, damage: 115, range: 6.5, cooldown: 3.0, projectileSpeed: 8, pierceArmor: true },
+      { cost: 310, damage: 210, range: 7.5, cooldown: 2.8, projectileSpeed: 8, pierceArmor: true },
     ],
     specs: [
       {
@@ -355,6 +355,7 @@ export const TOWERS: Record<TowerTypeId, TowerDef> = {
         damage: 480,
         range: 8.5,
         cooldown: 3.0,
+        projectileSpeed: 3,
         pierceArmor: true,
         execute: 0.15,
         rank2: {
@@ -365,7 +366,8 @@ export const TOWERS: Record<TowerTypeId, TowerDef> = {
           damage: 620,
           range: 9.0,
           cooldown: 2.9,
-          execute: 0, // el execute clásico deja de usarse; se sustituye por executeCurrent
+          projectileSpeed: 3,
+          execute: 0,
           executeCurrent: 0.75,
         },
       },
@@ -377,6 +379,7 @@ export const TOWERS: Record<TowerTypeId, TowerDef> = {
         damage: 150,
         range: 7.0,
         cooldown: 1.3,
+        projectileSpeed: 3,
         pierceArmor: true,
         rank2: {
           // *Explorador II*: cadencia y daño superiores, sin perder alcance.
@@ -385,6 +388,7 @@ export const TOWERS: Record<TowerTypeId, TowerDef> = {
           damage: 260,
           range: 7.5,
           cooldown: 1.1,
+          projectileSpeed: 3,
         },
       },
     ],

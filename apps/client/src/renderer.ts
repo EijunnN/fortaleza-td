@@ -39,6 +39,7 @@ const PROJ_BY_TYPE: Partial<Record<TowerTypeId, string>> = {
   cannon: 'cannonball',
   mortar: 'bomb',
   flak: 'flakneedle',
+  sniper: 'sniper',
 };
 // Corrección de orientación por sprite: el convenio es que el PNG apunte al
 // NORTE, pero la hoja de la Balista se generó apuntando al NORESTE (45°).
