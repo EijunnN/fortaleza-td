@@ -930,7 +930,7 @@ switchScreen('home');
 // enlace directo ?n=Nombre#SALA: entra a la sala sin pasar por el formulario
 {
   const qName = new URLSearchParams(location.search).get('n');
-  if (qName) saveName(qName.slice(0, 16));
+  if (qName && !store.name) saveName(qName.slice(0, 16));
   const hashCode = location.hash.replace('#', '').trim().toUpperCase();
   if (hashCode.length === 4 && store.name) {
     net.connect(wsPathJoin(hashCode), {
