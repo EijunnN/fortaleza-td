@@ -30,6 +30,18 @@ import {
 } from '@td/shared';
 import { sanitizeSettings } from '@td/shared';
 
+// sandbox: arranca directo en esta oleada (0 = normal). Se puede mutar `state.wave`
+// justo después de `createGame` y antes del primer tick sin romper nada: el escalado
+// de HP/botín/composición depende solo del número de oleada, no de historial jugado
+// (RNG no se resiembra por oleada, orcLevel no progresa solo, no hay dificultad de
+// mapa atada al tiempo transcurrido).
+const SANDBOX_START_WAVE = 70;
+// probado contra el simulador real: un ejército de ~84 torres necesita ~120-150k
+// para llegar a nivel 4 (especializado + Rango II) en todas. El mapa más grande
+// ("laberinto") mete ~170 torres → escala el presupuesto proporcionalmente.
+// El humano que se une sigue con 20000 (le alcanza para reforzar/reparar).
+const SANDBOX_BOT_GOLD = 400000;
+
 const MAX_SPECTATORS = 8;
 const CHAT_MAX = 200;
 const CHAT_RATE_LIMIT_MS = 500;
@@ -231,6 +243,12 @@ export class SandboxRoom {
     const seed = (Math.random() * 0xffffffff) | 0;
     this.game = createGame(map.id, this.settings.mode, this.settings.difficulty, seed,
       this.players.map((p) => ({ id: p.id, name: p.name, color: p.color })));
+    // sandbox: quien arranca la partida (el bot) parte con MUCHO oro/madera —
+    // necesita construir y mejorar a tope un ejército entero antes de la oleada 71.
+    for (const p of this.game.players) { p.gold = SANDBOX_BOT_GOLD; p.wood = SANDBOX_BOT_GOLD; }
+    // sandbox: saltar directo a SANDBOX_START_WAVE (antes de cualquier tick, así que
+    // el interludio inicial genera la oleada SANDBOX_START_WAVE+1 ya escalada).
+    if (SANDBOX_START_WAVE > 0) this.game.wave = SANDBOX_START_WAVE;
     this.simCtx = makeSimContext(map, makePlacementContext(map));
     this.pendingCmds = []; this.paused = false; this.speed = 1;
     this.replaySeed = seed;
