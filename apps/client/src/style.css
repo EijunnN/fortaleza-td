@@ -2488,7 +2488,9 @@ html, body {
    moderno: solo existe dentro de #screen-home, ver bloque "inicio" arriba).
    Sin separador propio: es un panel de .side-tabs, ver esa regla arriba. */
 .replays { margin-top: 0; }
-.replay-list { list-style: none; display: flex; flex-direction: column; gap: 6px; margin: 0; }
+/* mismo tope que .room-list: con muchas repeticiones guardadas la lista
+   scrollea por dentro en vez de estirar el panel (reporte del usuario) */
+.replay-list { list-style: none; display: flex; flex-direction: column; gap: 6px; margin: 0; max-height: min(44vh, 400px); overflow-y: auto; padding-right: 2px; scrollbar-width: thin; }
 .replay-list li {
   display: flex;
   align-items: center;
