@@ -1442,12 +1442,13 @@ html, body {
   background: var(--hud-glass-strong);
   border: 1px solid var(--hud-glass-border);
   border-radius: var(--h-radius-lg);
-  padding: 14px;
+  /* compacto a pedido del usuario: el panel tapaba media pantalla de juego */
+  padding: 10px 12px;
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
   backdrop-filter: blur(14px) saturate(150%);
   -webkit-backdrop-filter: blur(14px) saturate(150%);
 }
-#hud-panel h3 { display: flex; align-items: center; gap: 8px; font-size: 1.02rem; font-weight: 600; color: var(--h-fg); }
+#hud-panel h3 { display: flex; align-items: center; gap: 8px; font-size: 0.98rem; font-weight: 600; color: var(--h-fg); }
 #hud-panel .lvl { color: var(--h-accent-hi); margin-left: auto; white-space: nowrap; font-size: 0.85rem; font-variant-numeric: tabular-nums; }
 /* botón ✕ del panel: cierre explícito (clave en móvil, donde el panel es una hoja) */
 #panel-close {
@@ -1470,7 +1471,7 @@ html, body {
 #hud-panel .fuse-req { color: var(--h-muted-2); font-size: 0.72rem; }
 /* stats: etiqueta en muted, VALORES en <b> a blanco pleno — en la superficie de
    juego más usada, los números mandan y deben leerse de un vistazo */
-#hud-panel .pstats { font-size: 0.85rem; color: var(--h-muted); margin: 8px 0; line-height: 1.55; font-variant-numeric: tabular-nums; }
+#hud-panel .pstats { font-size: 0.8rem; color: var(--h-muted); margin: 6px 0; line-height: 1.38; font-variant-numeric: tabular-nums; }
 #hud-panel .pstats b { color: var(--h-fg); }
 #hud-panel .pstats .up { color: var(--h-ok); font-weight: 700; }
 /* valor EFECTIVO bajo un aura de Estandarte (⚑ dorado, como su anillo) */
@@ -1489,17 +1490,17 @@ html, body {
   font-size: 0.78rem;
   line-height: 1.35;
 }
-#hud-panel .prow { display: flex; gap: 8px; margin-top: 8px; }
-#hud-panel .prow .btn { flex: 1; font-size: 0.85rem; padding: 9px 6px; }
+#hud-panel .prow { display: flex; gap: 6px; margin-top: 6px; }
+#hud-panel .prow .btn { flex: 1; font-size: 0.82rem; padding: 7px 6px; }
 /* venta: el ghost neutro ya la mantiene secundaria; un toque de rojo tenue en el
    texto la separa aún más del primario ámbar (mejorar), sin gritar */
 #hud-panel .prow #panel-sell { color: #e5a3a3; }
 #hud-panel .prow #panel-sell:hover { color: var(--h-danger); border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.08); }
-.tmodes { display: flex; gap: 4px; margin-top: 8px; flex-wrap: wrap; }
+.tmodes { display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap; }
 .tmode {
   flex: 1;
   font-size: 0.7rem;
-  padding: 6px 2px;
+  padding: 5px 2px;
   border-radius: 6px;
   background: var(--h-card-2);
   border: 1px solid var(--h-border);
