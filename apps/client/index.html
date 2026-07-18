@@ -82,23 +82,35 @@
       </div>
 
       <aside class="home-side panel">
-        <div id="home-rooms" class="rooms">
-          <h3><span class="live-dot" aria-hidden="true"></span>Salas públicas</h3>
+        <!-- pestañas del panel lateral: UNA sección visible a la vez (antes se
+             apilaban las tres siempre, tapando todo de un vistazo — feedback
+             directo). Mismo lenguaje visual que el segmentado Crear sala/Unirse
+             de la izquierda (clases .home-tabs/.tab compartidas). El estado de
+             "hay datos o no" ahora vive DENTRO de cada panel (estado vacío
+             propio); dejó de controlar si la sección se muestra. -->
+        <div id="home-side-tabs" class="home-tabs side-tabs" role="tablist" aria-label="Panel lateral">
+          <button id="side-tab-rooms" class="tab active" type="button" role="tab" aria-selected="true" aria-controls="home-rooms"><span class="live-dot" aria-hidden="true"></span>Salas<span id="side-tab-rooms-count" class="tab-count" hidden>0</span></button>
+          <button id="side-tab-scores" class="tab" type="button" role="tab" aria-selected="false" aria-controls="home-scores" tabindex="-1">Récords<span id="side-tab-scores-count" class="tab-count" hidden>0</span></button>
+          <button id="side-tab-replays" class="tab" type="button" role="tab" aria-selected="false" aria-controls="home-replays" tabindex="-1">Repeticiones<span id="side-tab-replays-count" class="tab-count" hidden>0</span></button>
+        </div>
+
+        <div id="home-rooms" class="rooms home-tabpanel" role="tabpanel" aria-labelledby="side-tab-rooms">
           <ul id="home-rooms-list" class="room-list"></ul>
-          <p id="home-rooms-empty" class="hint rooms-empty">No hay salas públicas ahora mismo.<br>Crea la primera: elige «Pública» al crear tu sala y aparecerá aquí para que otros entren a jugar o a mirar.</p>
+          <p id="home-rooms-empty" class="hint side-empty">No hay salas públicas ahora mismo.<br>Crea la primera: elige «Pública» al crear tu sala y aparecerá aquí para que otros entren a jugar o a mirar.</p>
         </div>
 
-        <div id="home-scores" class="scores" hidden>
-          <h3>Récords <span class="section-sub">Infinito · Horda</span></h3>
+        <div id="home-scores" class="scores home-tabpanel" role="tabpanel" aria-labelledby="side-tab-scores" hidden>
+          <p class="side-panel-meta">Infinito · Horda</p>
           <ol id="home-scores-list"></ol>
+          <p id="home-scores-empty" class="hint side-empty">Aún no hay récords. Se registran en Infinito y Horda.</p>
         </div>
 
-        <div id="home-replays" class="replays" hidden>
-          <h3>Repeticiones</h3>
+        <div id="home-replays" class="replays home-tabpanel" role="tabpanel" aria-labelledby="side-tab-replays" hidden>
           <ul id="home-replays-list" class="replay-list"></ul>
+          <p id="home-replays-empty" class="hint side-empty">No hay repeticiones guardadas en este dispositivo.</p>
         </div>
         <!-- acciones secundarias: lado a lado y ancladas abajo para que la
-             columna derecha no quede con aire muerto bajo la lista de salas -->
+             columna derecha no quede con aire muerto bajo el panel activo -->
         <div class="home-side-actions">
           <button id="btn-load-save" class="btn ghost small" title="Continuar partida guardada"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 12.5v5a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-5"/><path d="M12 3.5v10.8M8.3 10.8 12 14.5l3.7-3.7"/></svg>Continuar</button>
           <button id="btn-load-replay" class="btn ghost small" title="Cargar repetición"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 6.8a1.8 1.8 0 0 1 1.8-1.8h3.6l1.8 2h8a1.8 1.8 0 0 1 1.8 1.8v8.4a1.8 1.8 0 0 1-1.8 1.8H5.3a1.8 1.8 0 0 1-1.8-1.8V6.8Z"/></svg>Repetición</button>
