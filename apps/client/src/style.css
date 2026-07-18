@@ -1837,6 +1837,15 @@ html, body {
 #overlay-end .btn.ghost:hover, #replay-bar .btn.ghost:hover,
 #overlay-bestiary .btn.ghost:hover, #overlay-countdown .btn.ghost:hover,
 .dialog-card .btn.ghost:hover { background: var(--h-card-2); color: var(--h-fg); border-color: var(--h-border-hover); }
+/* los dos botones de acción del panel de ajustes: MISMA anchura (100%) y
+   contenido centrado — sin esto, «Continuar en otro dispositivo» salía a ancho
+   completo (regla heredada) y «Abandonar» encogido a su texto, desalineados */
+#btn-continue-device, #btn-abandon-settings {
+  display: flex;
+  width: 100%;
+  justify-content: center;
+  margin-top: 8px;
+}
 /* acción destructiva (abandonar / vender fusión): rojo tenue, NUNCA compite con
    el primario ámbar */
 #hud-panel .btn.danger, #settings-panel .btn.danger, #overlay-pause .btn.danger,
