@@ -185,6 +185,20 @@ let zoom = 1;
 let panX = 0;
 let panY = 0;
 const MAX_ZOOM = 3.2;
+// F9c · zoom MÍNIMO efectivo del mapa actual (1 = puede verse entero). En mapas
+// con MapDef.viewCap (El Gran Concilio) sube por encima de 1: NO se permite ver
+// el tablero completo — se juega navegando con cámara y minimapa, como en el
+// Green TD original. Recalculado por frame en computeView (depende del viewport).
+let minZoomCur = 1;
+
+// F9c · pulsos de PELIGRO en el minimapa: fugas recientes por ruta (pathIdx →
+// timestamp). Con la cámara capada el jugador no ve todo el mapa; esto es su
+// radar: la puerta que fuga parpadea en rojo aunque esté fuera de pantalla.
+const dangerFlashes = new Map<number, number>();
+const DANGER_FLASH_MS = 2600;
+export function flashDanger(pathIdx: number): void {
+  dangerFlashes.set(pathIdx, performance.now());
+}
 
 // ---------- calidad adaptativa (modo ligero autoadaptativo) ----------
 // Tres escalones. ALTA dibuja TODO. MEDIA recorta la decoración NO informativa
@@ -353,7 +367,9 @@ export function zoomAt(px: number, py: number, factor: number): void {
   const worldX = (px - view.ox) / view.scale;
   const worldY = (py - view.oy) / view.scale;
   autoFrame = false; // el jugador toma el control: ya no reencuadramos solos
-  zoom = Math.min(MAX_ZOOM, Math.max(1, zoom * factor));
+  // el suelo del zoom es minZoomCur: en mapas con viewCap no se puede alejar
+  // hasta ver el tablero entero (F9c)
+  zoom = Math.min(MAX_ZOOM, Math.max(minZoomCur, zoom * factor));
   const s2 = baseScale * zoom;
   const w = canvas.clientWidth;
   const h = canvas.clientHeight;
@@ -444,6 +460,7 @@ export function resetRenderer(): void {
   shake = 0;
   ambient.length = 0;
   pings.length = 0;
+  dangerFlashes.clear();
   towerAnim.clear();
   projSeen.clear();
   projPrev.clear();
@@ -731,6 +748,16 @@ function computeView(map: MapDef): void {
   // el mapa completo y el resto del código (clamps, minimapa, buckets) no cambia.
   baseScale = Math.max(6, Math.min(availW / map.gridW, availH / map.gridH));
 
+  // F9c · viewCap: tope de celdas visibles por mapa. Espectadores y repeticiones
+  // quedan EXENTOS (están para mirar, no para jugar); y nunca por encima de
+  // MAX_ZOOM (en pantallas diminutas el cap cedería antes que romper el zoom).
+  const cap = map.viewCap;
+  minZoomCur = 1;
+  if (cap && !store.spectator && !store.replay) {
+    minZoomCur = Math.min(MAX_ZOOM, Math.max(1, w / (baseScale * cap.w), h / (baseScale * cap.h)));
+  }
+  if (zoom < minZoomCur) zoom = minZoomCur;
+
   // Re-encuadre "cover": al arrancar/resetear (pendingFrame) o al cambiar el
   // TAMAÑO del viewport mientras la cámara está en modo automático. Si el jugador
   // ya movió la cámara (autoFrame=false) respetamos su zoom/pan y solo reclampamos.
@@ -740,9 +767,9 @@ function computeView(map: MapDef): void {
     // margen a cada lado (de ahí el +1 en la dimensión: gridN celdas de mapa +
     // 1 celda repartida como marco). El eje que sobra desborda y se recorta.
     const coverScale = Math.max(availW / (map.gridW + 1), availH / (map.gridH + 1));
-    // como zoom relativo al fit; clamp a [1, MAX_ZOOM] (1 = ya cabe entero;
-    // MAX_ZOOM = tope, aspectos extremos dejan bandas que rellena el decorado).
-    zoom = Math.min(MAX_ZOOM, Math.max(1, coverScale / baseScale));
+    // como zoom relativo al fit; clamp a [minZoomCur, MAX_ZOOM] (minZoom sube
+    // por encima de 1 en mapas con viewCap; en el resto es 1 = mapa entero).
+    zoom = Math.min(MAX_ZOOM, Math.max(minZoomCur, coverScale / baseScale));
     const c = pendingFrame ?? actionCenter(map);
     const s0 = baseScale * zoom;
     panX = (map.gridW * s0) / 2 - c.x * s0;
@@ -4944,6 +4971,28 @@ function drawMiniMap(gs: GameStore, now: number): void {
       g.fill();
     }
   }
+
+  // F9c · pulsos de PELIGRO: la puerta por la que acaba de fugar un enemigo
+  // parpadea en rojo ~2.6s. Con la cámara capada (viewCap) es el radar que
+  // sustituye al "ver todo el mapa": miras el minimapa y sabes qué puerta arde.
+  for (const [idx, t0] of dangerFlashes) {
+    const age = now - t0;
+    if (age > DANGER_FLASH_MS) {
+      dangerFlashes.delete(idx);
+      continue;
+    }
+    const spawn = map.paths[idx]?.[0];
+    if (!spawn) continue;
+    const fade = 1 - age / DANGER_FLASH_MS;
+    const pulse = 0.5 + Math.sin(now / 110) * 0.5;
+    g.globalAlpha = fade * (0.55 + pulse * 0.45);
+    g.strokeStyle = '#ff5252';
+    g.lineWidth = 2;
+    g.beginPath();
+    g.arc(bx + (spawn[0] + 0.5) * s, by + (spawn[1] + 0.5) * s, Math.max(3, s * (0.8 + pulse * 0.7)), 0, Math.PI * 2);
+    g.stroke();
+  }
+  g.globalAlpha = 0.92;
 
   // pings cooperativos: también visibles en el minimapa, como anillo/punto
   // pulsante del color de quien los lanzó, mientras el ping viva.

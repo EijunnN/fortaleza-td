@@ -2,7 +2,7 @@ import './style.css';
 import { ATTACK_TYPE_INFO, ENEMIES, ENEMY_ORDER, FUSIONS, GAME_SPEEDS, START_LIVES, TOWERS, type GameEvent, type Snap } from '@td/shared';
 import { net, wsPathJoin } from './net.js';
 import { pushFrame, roomPrevToken, saveName, saveRoomToken, seedRoomPrevToken, startGameStore, store } from './store.js';
-import { activeTier, addPing, addShake, getQualityMode, initRenderer, isMinimapOn, resetRenderer, setQualityMode, toggleMinimap, towerFired, type QualityMode } from './renderer.js';
+import { activeTier, addPing, addShake, flashDanger, getQualityMode, initRenderer, isMinimapOn, resetRenderer, setQualityMode, toggleMinimap, towerFired, type QualityMode } from './renderer.js';
 import { initInput } from './input.js';
 import { initBestiary } from './bestiary.js';
 import { applySpectatorUI, buildTowerBar, hidePanel, initMarket, initScoreboard, initShop, onTick, toast, addChat, refreshPanel, syncSpeedButton, syncTowerBar, toggleSpectatorTowers } from './hud.js';
@@ -186,6 +186,9 @@ function processEvents(events: GameEvent[]): void {
         toast(`💔 ¡Se escapó un ${ENEMIES[ev.type].name}! Quedan ${ev.lives} vidas`);
         addShake(4);
         sfx.leak();
+        // F9c · radar: la puerta que fugó parpadea en rojo en el minimapa (clave
+        // con la cámara capada, donde esa puerta puede estar fuera de pantalla)
+        if (ev.pathIdx !== undefined) flashDanger(ev.pathIdx);
         break;
       case 'steal':
         toast(`🪙 ¡El Ladrón te robó ${ev.gold} de oro!`);
