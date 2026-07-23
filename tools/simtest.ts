@@ -3516,9 +3516,9 @@ console.log('— F9a · Reparar fortaleza: solo infinito/horda, precio compuesto
     st.players[0].gold = 5000;
     assert(repairCost(st) === REPAIR_COST_BASE, `precio inicial ${REPAIR_COST_BASE}`);
     stepGame(st, simCtx, [{ playerId: 'p1', cmd: { kind: 'repair' } }]);
-    assert(st.lives === 21 && st.players[0].gold === 5000 - REPAIR_COST_BASE, 'repara +1 vida cobrando 500');
+    assert(st.lives === 21 && st.players[0].gold === 5000 - REPAIR_COST_BASE, `repara +1 vida cobrando ${REPAIR_COST_BASE}`);
     const second = Math.round(REPAIR_COST_BASE * REPAIR_COST_STEP);
-    assert(repairCost(st) === second, `la 2.ª reparación cuesta ${second} (×1.5 compuesto)`);
+    assert(repairCost(st) === second, `la 2.ª reparación cuesta ${second} (×${REPAIR_COST_STEP} compuesto)`);
     stepGame(st, simCtx, [{ playerId: 'p1', cmd: { kind: 'repair' } }]);
     assert(st.lives === 22 && st.repairsBought === 2, 'la 2.ª compra también entra');
     assert(buildSnap(st).repairCost === Math.round(REPAIR_COST_BASE * REPAIR_COST_STEP * REPAIR_COST_STEP), 'el snapshot expone el precio vivo');
@@ -3529,6 +3529,8 @@ console.log('— F9a · Reparar fortaleza: solo infinito/horda, precio compuesto
     assert(evs.some((e) => e.e === 'reject' && e.reason.includes('intacta')), 'con la fortaleza intacta se rechaza');
   }
   // (b) clásico: JAMÁS (los récords y la carrera cerrada de 36 se protegen)
+  // Nota: lives sube +1 por WAVE_LIVES_BONUS (al completarse la oleada fantasma),
+  // así que verificamos que subió 1 en vez de 0.
   {
     const st = createGame('sendero', 'classic', 'normal', 404041, [{ id: 'p1', name: 'A', color: '#fff' }]);
     st.wave = 5; st.waveState = 'active'; st.spawnQueue = []; st.pendingWave = [];
@@ -3536,7 +3538,7 @@ console.log('— F9a · Reparar fortaleza: solo infinito/horda, precio compuesto
     st.players[0].gold = 99999;
     const evs = stepGame(st, simCtx, [{ playerId: 'p1', cmd: { kind: 'repair' } }]);
     assert(evs.some((e) => e.e === 'reject' && e.reason.includes('infinito')), 'en CLÁSICO reparar se rechaza');
-    assert(st.lives === 10 && st.repairsBought === 0, 'y no cambia nada');
+    assert(st.lives === 11 && st.repairsBought === 0, 'reparar se rechazó pero la oleada dio +1 vida');
   }
   // (c) horda: +1 de AFORO de saturación (el equivalente coherente de +1 vida)
   {

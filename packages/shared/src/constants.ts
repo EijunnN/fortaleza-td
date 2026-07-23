@@ -270,10 +270,18 @@ export const ELITE_LEVEL_OPEN_STEP = 1.5; // endless/horda: coste compuesto tras
 // ---------- F9a (v19) · REPARAR FORTALEZA (solo infinito/horda) ----------
 // Compra de EQUIPO en la 🛒 Tienda: +1 vida (infinito) o +1 de AFORO de saturación
 // (horda — su "vida" es el cupo de enemigos vivos, así que reforzar murallas =
-// aguantar un enemigo más). Coste inicial 500 escalando ×1.5 compuesto por compra.
+// aguantar un enemigo más). Coste inicial 200 escalando ×1.35 compuesto por compra.
 // Disponible para todos → los récords siguen justos. En clásico NO existe.
-export const REPAIR_COST_BASE = 500;
-export const REPAIR_COST_STEP = 1.5;
+export const REPAIR_COST_BASE = 200;
+export const REPAIR_COST_STEP = 1.35;
+
+// Vidas que se recuperan por oleada completada, según dificultad.
+// Es la recompensa por sobrevivir: fácil da más, difícil da menos pero ayuda.
+export const WAVE_LIVES_BONUS: Record<string, number> = {
+  easy: 2,
+  normal: 1,
+  hard: 1,
+};
 
 // ---------- F9a (v19) · specs de identidad ----------
 // Poder Vital: +20% de daño mientras el EQUIPO conserve ≥25 vidas (de 30). El

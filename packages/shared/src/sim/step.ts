@@ -60,6 +60,7 @@ import {
   TURBO_WOOD_MULT,
   WAVE_BONUS_BASE,
   WAVE_BONUS_PER_WAVE,
+  WAVE_LIVES_BONUS,
   ORC_RATES,
   WOOD_COST_RANK2,
   WOOD_COST_SPEC,
@@ -1355,6 +1356,16 @@ function stepWaves(state: GameState, ctx: SimContext, events: GameEvent[]): void
     for (const p of state.players) {
       p.gold += bonus;
       p.stats.goldEarned += bonus;
+    }
+
+    // Vidas por oleada completada: recompensa según dificultad.
+    // En horda las vidas son aforo de saturación, así que no aplica.
+    if (state.mode !== 'horde') {
+      const livesGain = WAVE_LIVES_BONUS[state.difficulty] ?? 1;
+      if (livesGain > 0) {
+        state.lives = Math.min(state.maxLives, state.lives + livesGain);
+        events.push({ e: 'sys', msg: `❤️ Vidas restauradas: +${livesGain} (oleada ${state.wave})` });
+      }
     }
     // ingresos de las minas (la Casa de Moneda reparte a todo el equipo)
     for (const tower of state.towers) {
