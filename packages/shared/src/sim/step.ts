@@ -1356,6 +1356,13 @@ function stepWaves(state: GameState, ctx: SimContext, events: GameEvent[]): void
       p.gold += bonus;
       p.stats.goldEarned += bonus;
     }
+
+    // Vidas por oleada: siempre +1 al completar cualquier oleada.
+    // En horda las vidas son aforo de saturación, así que no aplica.
+    if (state.mode !== 'horde') {
+      state.lives += 1;
+      events.push({ e: 'sys', msg: `❤️ Vidas restauradas: +1 (oleada ${state.wave})` });
+    }
     // ingresos de las minas (la Casa de Moneda reparte a todo el equipo)
     for (const tower of state.towers) {
       const lvl = statsOf(tower);

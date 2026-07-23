@@ -20,7 +20,6 @@ import {
   rank2Cost,
   SELL_REFUND,
   SENTRY_DURATION_SEC,
-  START_LIVES,
   statsOf,
   TARGET_MODES,
   TICK_RATE,
@@ -1590,7 +1589,7 @@ export function renderShop(): void {
   const snap = gs.latest;
   const grid = $('shop-grid');
   const mode = gs.init.mode;
-  const wantRepair = mode !== 'classic';
+  const wantRepair = true; // disponible en todos los modos
   const wantCount = SHOP_ITEMS.length + (wantRepair ? 1 : 0);
   if (grid.childElementCount !== wantCount) {
     const repairHtml = wantRepair
@@ -1598,8 +1597,8 @@ export function renderShop(): void {
         <span class="shop-icon">🏰</span>
         <span class="shop-info"><b>Reparar fortaleza</b><span class="shop-desc">${
           mode === 'horde'
-            ? 'Refuerza las murallas: +1 de AFORO de saturación (aguantáis un enemigo más a la vez). El precio sube ×1.5 con cada compra del equipo.'
-            : '+1 vida para el equipo. El precio sube ×1.5 con cada compra del equipo. Reencender el Poder Vital puede valer cada moneda.'
+            ? 'Refuerza las murallas: +1 de AFORO de saturación. El precio sube ×1.25 con cada compra.'
+            : 'Compra vidas en lote: 3→5→7→10 (máx). El precio sube ×1.25 por compra del equipo.'
         }</span></span>
         <span class="shop-cost" data-repair-cost>🪙…</span>
       </button>`
@@ -1620,14 +1619,13 @@ export function renderShop(): void {
     el.classList.toggle('poor', gold < TOWERS[type].levels[0].cost);
     el.classList.toggle('selected', gs.selection?.kind === 'placing' && gs.selection.towerType === type);
   }
-  // F9a · reparación: precio vivo del snapshot + estados (sin oro / vidas al máximo)
+  // reparación: precio vivo del snapshot + estado sin oro
   const repairBtn = grid.querySelector<HTMLButtonElement>('[data-action="repair"]');
   if (repairBtn && snap) {
     const cost = snap.repairCost;
-    const full = mode === 'endless' && snap.lives >= START_LIVES;
     const costEl = repairBtn.querySelector<HTMLElement>('[data-repair-cost]');
-    if (costEl) costEl.textContent = full ? 'intacta' : `🪙${cost}`;
-    repairBtn.classList.toggle('poor', full || gold < cost);
+    if (costEl) costEl.textContent = `🪙${cost}`;
+    repairBtn.classList.toggle('poor', gold < cost);
   }
 }
 
@@ -1636,6 +1634,23 @@ function syncShop(now: number): void {
   if (now - lastShopSync < 250) return;
   lastShopSync = now;
   renderShop();
+}
+
+// Constante de compilación inyectada por Vite (vite.config.ts).
+declare const __BUILD_VER__: string;
+
+// Muestra la versión de compilación en la esquina inferior izquierda.
+// También se llama desde el home.
+export function initVersion(): void {
+  const el = $('hud-version');
+  if (el) {
+    el.textContent = typeof __BUILD_VER__ !== 'undefined' ? __BUILD_VER__ : 'dev';
+  }
+  // También en el home si existe
+  const homeEl = document.getElementById('home-version');
+  if (homeEl) {
+    homeEl.textContent = typeof __BUILD_VER__ !== 'undefined' ? __BUILD_VER__ : 'dev';
+  }
 }
 
 // Cablea la tienda: 🛒 la abre/cierra; ✕ o un toque fuera la cierran; comprar un

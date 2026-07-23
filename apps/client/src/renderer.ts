@@ -323,9 +323,10 @@ let surroundFar = '#0b0c12'; // tono "lejano": borde del decorado y fondo del ca
 const SURROUND_CELLS = 10; // celdas de marco decorativo alrededor del mapa
 
 // ---------- minimapa ----------
+// Desactivado: el recuadro estorbaba. Se reactiva cambiando miniOn a true.
 // recuadro en coordenadas de PANTALLA calculado en cada frame (o null si oculto)
 let miniRect: { x: number; y: number; w: number; h: number; s: number } | null = null;
-let miniOn = localStorage.getItem('td_minimap') !== '0'; // visible por defecto
+let miniOn = false; // desactivado
 
 export function isMinimapOn(): boolean {
   return miniOn;
@@ -1437,6 +1438,19 @@ function drawDoorBanners(gs: GameStore, now: number): void {
     g.strokeStyle = 'rgba(0,0,0,0.3)';
     g.lineWidth = Math.max(1, s * 0.02);
     g.stroke();
+    // nombre del jugador en el estandarte (más visible)
+    g.font = `${Math.max(6, Math.round(s * 0.22))}px sans-serif`;
+    g.textAlign = 'left';
+    g.textBaseline = 'middle';
+    const name = p.name.charAt(0).toUpperCase() + p.name.slice(1);
+    g.fillStyle = p.color;
+    g.globalAlpha = 0.5;
+    g.fillText(name, s * 0.5, s * 0.02);
+    g.globalAlpha = 0.18;
+    g.strokeStyle = '#ffffff';
+    g.lineWidth = Math.max(1, s * 0.08);
+    g.strokeText(name, s * 0.5, s * 0.02);
+    g.globalAlpha = 1;
     g.restore();
   }
 }

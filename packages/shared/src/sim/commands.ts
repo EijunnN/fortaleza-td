@@ -8,6 +8,7 @@ import {
   ORC_UPGRADE_COSTS,
   REPAIR_COST_BASE,
   REPAIR_COST_STEP,
+  REPAIR_LIVES,
   SELL_REFUND,
   SENTRY_DURATION_SEC,
   TICK_RATE,
@@ -32,8 +33,8 @@ export function boomCost(state: { boomsBought: number }): number {
   return Math.round(TOWERS.boom.levels[0].cost * Math.pow(BOOM_COST_TEAM_STEP, state.boomsBought));
 }
 
-// F9a (v19) · precio EFECTIVO de Reparar la fortaleza: 500 ×1.5 compuesto por
-// compra del EQUIPO. Igual que el barril: el server es la única fuente del precio.
+// Precio EFECTIVO de Reparar la fortaleza: 200 ×1.25 compuesto por compra
+// del EQUIPO. El server es la única fuente del precio.
 export function repairCost(state: { repairsBought: number }): number {
   return Math.round(REPAIR_COST_BASE * Math.pow(REPAIR_COST_STEP, state.repairsBought));
 }
@@ -490,21 +491,10 @@ export function applyCommands(
         break;
       }
 
-      // F9a (v19) · REPARAR FORTALEZA — SOLO infinito/horda (el clásico de 36 es
-      // una carrera cerrada: comprar vidas lo trivializaría). En infinito: +1 vida
-      // (tope maxLives). En horda: +1 de AFORO de saturación (su "vida" real).
-      // El precio escala ×1.5 compuesto POR EQUIPO y lo calcula el server del
-      // estado — el comando no lleva precio que falsificar. Disponible para todos
-      // los jugadores → los récords siguen comparables.
+      // REPARAR FORTALEZA — disponible en TODOS los modos. Vidas progresivas:
+      // 3→5→7→10 (máx) según cuántas veces se ha comprado. En horda: +1 de
+      // AFORO de saturación. Precio escala ×1.25 compuesto POR EQUIPO.
       case 'repair': {
-        if (state.mode === 'classic') {
-          reject(events, playerId, 'Reparar la fortaleza solo existe en infinito y horda');
-          break;
-        }
-        if (state.mode === 'endless' && state.lives >= state.maxLives) {
-          reject(events, playerId, 'La fortaleza está intacta');
-          break;
-        }
         const cost = repairCost(state);
         if (player.gold < cost) {
           reject(events, playerId, 'No te alcanza el oro');
@@ -512,23 +502,24 @@ export function applyCommands(
         }
         player.gold -= cost;
         player.stats.goldSpent += cost;
+        const idx = state.repairsBought;
         state.repairsBought += 1;
         let lives: number;
-        if (state.mode === 'endless') {
-          state.lives = Math.min(state.maxLives, state.lives + 1);
-          lives = state.lives;
-        } else {
-          // horda: el aforo efectivo = HORDE_CAP + repairsBought (lo lee stepEnemies);
-          // reportamos el AFORO nuevo en el evento para el toast
+        if (state.mode === 'horde') {
+          // horda: el aforo efectivo = HORDE_CAP + repairsBought
           lives = state.repairsBought;
+        } else {
+          const gain = REPAIR_LIVES[Math.min(idx, REPAIR_LIVES.length - 1)];
+          state.lives += gain;
+          lives = gain;
         }
         events.push({ e: 'repair', playerId, lives, cost });
         events.push({
           e: 'sys',
           msg:
-            state.mode === 'endless'
-              ? `🏰 ${player.name} reparó la fortaleza (+1 vida, 🪙${cost})`
-              : `🏰 ${player.name} reforzó las murallas (+1 de aforo, 🪙${cost})`,
+            state.mode === 'horde'
+              ? `🏰 ${player.name} reforzó las murallas (+1 de aforo, 🪙${cost})`
+              : `🏰 ${player.name} reparó la fortaleza (+${lives} vidas, 🪙${cost})`,
         });
         break;
       }

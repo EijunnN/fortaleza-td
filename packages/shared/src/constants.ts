@@ -154,14 +154,14 @@ export const ENDLESS_BOUNTY_CAP = 3;
 // sin construir nada (como el peón de Green TD). El oro compra torres; la madera
 // compra PODER: las ★especializaciones y el ★★Rango II cuestan madera además de
 // oro. (Un edificio que acelere la tala puede venir en una iteración futura.)
-export const WOOD_PER_SEC = 0.4; // tala BASE del orco nivel 1 (= ORC_RATES[0])
+export const WOOD_PER_SEC = 0.55; // tala BASE del orco nivel 1 (= ORC_RATES[0])
 export const START_WOOD = 30; // madera inicial
 export const WOOD_COST_SPEC = 45; // coste en madera de una especialización (★)
 export const WOOD_COST_RANK2 = 60; // coste en madera del Rango II (★★)
 // F5.5 · el ORCO se MEJORA con oro (nivel 1..5): tala por segundo según nivel y
 // coste de subir AL SIGUIENTE nivel (índice = nivel actual − 1). Es el motor de
 // madera a largo plazo; el mercado es la conversión instantánea.
-export const ORC_RATES = [0.4, 0.6, 0.8, 1.0, 1.25]; // 🪵/s por nivel de orco
+export const ORC_RATES = [0.55, 0.75, 1.0, 1.3, 1.6]; // 🪵/s por nivel de orco
 export const ORC_UPGRADE_COSTS = [140, 260, 420, 620]; // 🪙 para pasar a nv 2..5
 
 // ---------- F5.4 · mercado global de madera ----------
@@ -267,13 +267,15 @@ export const ELITE_LEVEL_HASTE = 0.04; // +4% cadencia por nivel (compuesto)
 export const ELITE_LEVEL_CAP_CLASSIC = 6; // pasos máx en clásico (= nivel 10)
 export const ELITE_LEVEL_OPEN_STEP = 1.5; // endless/horda: coste compuesto tras el paso 6
 
-// ---------- F9a (v19) · REPARAR FORTALEZA (solo infinito/horda) ----------
-// Compra de EQUIPO en la 🛒 Tienda: +1 vida (infinito) o +1 de AFORO de saturación
-// (horda — su "vida" es el cupo de enemigos vivos, así que reforzar murallas =
-// aguantar un enemigo más). Coste inicial 500 escalando ×1.5 compuesto por compra.
-// Disponible para todos → los récords siguen justos. En clásico NO existe.
-export const REPAIR_COST_BASE = 500;
-export const REPAIR_COST_STEP = 1.5;
+// ---------- REPARAR FORTALEZA ----------
+// Compra en la 🛒 Tienda: +vidas progresivas (3→5→7→10 máx) para el equipo.
+// En horda: +1 de AFORO de saturación (su "vida" real). Coste inicial 200
+// escalando ×1.25 compuesto por compra del equipo. Disponible en todos los modos.
+export const REPAIR_COST_BASE = 280;
+export const REPAIR_COST_STEP = 1.35;
+// Vidas ganadas por compra según cuántas veces se ha reparado (índice).
+// Tope en 10: a partir de la 4ª compra siempre da 10 vidas.
+export const REPAIR_LIVES = [3, 5, 7, 10];
 
 // ---------- F9a (v19) · specs de identidad ----------
 // Poder Vital: +20% de daño mientras el EQUIPO conserve ≥25 vidas (de 30). El
@@ -401,5 +403,5 @@ export const PLAYER_COLORS = [
 // el control del abuso queda SOLO en el precio ×1.3 de equipo. Campeones 👑 al
 // mordisco con tope y jefes con su asedio clásico — decisión del usuario tras
 // probar el nerf v19 en producción.
-export const BALANCE_VERSION = 20;
+export const BALANCE_VERSION = 21;
 export const PROTOCOL_VERSION = 1;
