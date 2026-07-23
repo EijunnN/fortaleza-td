@@ -278,9 +278,9 @@ export const REPAIR_COST_STEP = 1.35;
 // Vidas que se recuperan por oleada completada, según dificultad.
 // Es la recompensa por sobrevivir: fácil da más, difícil da menos pero ayuda.
 export const WAVE_LIVES_BONUS: Record<string, number> = {
-  easy: 2,
-  normal: 1,
-  hard: 1,
+  easy: 5,
+  normal: 3,
+  hard: 3,
 };
 
 // ---------- F9a (v19) · specs de identidad ----------
