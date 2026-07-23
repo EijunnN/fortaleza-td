@@ -1438,14 +1438,18 @@ function drawDoorBanners(gs: GameStore, now: number): void {
     g.strokeStyle = 'rgba(0,0,0,0.3)';
     g.lineWidth = Math.max(1, s * 0.02);
     g.stroke();
-    // nombre del jugador (sutil, diminuto, fuera del mástil)
+    // nombre del jugador en el estandarte (más visible)
     g.font = `${Math.max(6, Math.round(s * 0.22))}px sans-serif`;
     g.textAlign = 'left';
     g.textBaseline = 'middle';
     const name = p.name.charAt(0).toUpperCase() + p.name.slice(1);
     g.fillStyle = p.color;
-    g.globalAlpha = 0.28;
+    g.globalAlpha = 0.5;
     g.fillText(name, s * 0.5, s * 0.02);
+    g.globalAlpha = 0.18;
+    g.strokeStyle = '#ffffff';
+    g.lineWidth = Math.max(1, s * 0.08);
+    g.strokeText(name, s * 0.5, s * 0.02);
     g.globalAlpha = 1;
     g.restore();
   }

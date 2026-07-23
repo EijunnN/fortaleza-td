@@ -4,7 +4,7 @@ import pkg from '../../package.json' with { type: 'json' };
 const now = new Date();
 const pad = (n: number) => String(n).padStart(2, '0');
 const ts = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
-const BUILD_VER = JSON.stringify(`v${pkg.version} · ${ts}`);
+const BUILD_VER = JSON.stringify(ts);
 
 export default defineConfig({
   define: {

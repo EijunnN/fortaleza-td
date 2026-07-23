@@ -3531,16 +3531,16 @@ console.log('— Reparar fortaleza: todos los modos, vidas progresivas (3→5→
     assert(!evs.some((e) => e.e === 'reject'), 'sin rechazo: se acumula sin límite');
   }
   // (b) clásico: ahora SÍ se permite reparar en todos los modos.
-  // La oleada da +2 vidas fijo.
+  // La oleada da +1 vida.
   {
     const st = createGame('sendero', 'classic', 'normal', 404041, [{ id: 'p1', name: 'A', color: '#fff' }]);
     st.wave = 5; st.waveState = 'active'; st.spawnQueue = []; st.pendingWave = [];
     st.lives = 10;
     st.players[0].gold = 99999;
     const evs = stepGame(st, simCtx, [{ playerId: 'p1', cmd: { kind: 'repair' } }]);
-    // reparación = +3 (1ª compra) + oleada = +2 → total 15
+    // reparación = +3 (1ª compra) + oleada = +1 → total 14
     assert(evs.some((e) => e.e === 'repair'), 'reparar en clásico ahora funciona');
-    assert(st.lives === 15 && st.repairsBought === 1, 'reparó +3 + oleada +2 = 15');
+    assert(st.lives === 14 && st.repairsBought === 1, 'reparó +3 + oleada +1 = 14');
   }
   // (c) horda: +1 de AFORO de saturación (el equivalente coherente de +1 vida)
   {
