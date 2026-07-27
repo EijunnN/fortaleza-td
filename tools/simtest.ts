@@ -19,6 +19,7 @@ import {
   blockedGrid,
   buildField,
   fieldDist,
+  ARENA_HP_MULT,
   inPlot,
   laneEntrySubs,
   laneGoalSubs,
@@ -4361,6 +4362,29 @@ console.log('— ARENA · parcelas, oleada espejo, aislamiento y eliminación �
       'el servidor RECHAZA plantar un Sentry en arena',
     );
     assert(st.towers.length === 0, 'y no queda ninguna torre puesta');
+  }
+
+  // 5d. RITMO de las primeras oleadas. Con la oleada estándar llegaban 7 cuerpos
+  //     de 32 de vida: el francotirador los borraba de un disparo y había que
+  //     acelerar el juego para no aburrirse. Un carril de laberinto da mucho más
+  //     tiempo de fuego que un recorrido fijo, así que la oleada pide más masa.
+  {
+    const gen1 = generateWave({ rng: 1234 }, 1, 1, 1, 'arena', [0]);
+    const hp1 = Math.round(ENEMIES.goblin.hp * waveHpMult(1, 'normal', 1) * ARENA_HP_MULT);
+    console.log(`   arena o1: ${gen1.entries.length} monstruos de ~${hp1} de vida`);
+    assert(gen1.entries.length >= 15, `la o1 de arena trae masa suficiente (${gen1.entries.length} ≥ 15)`);
+    assert(
+      hp1 > TOWERS.sniper.levels[0].damage,
+      `la morralla de la o1 aguanta un disparo del francotirador (${hp1} > ${TOWERS.sniper.levels[0].damage})`,
+    );
+    // …y el resto del juego NO se toca: mismo presupuesto que siempre en infinito
+    const endless1 = generateWave({ rng: 1234 }, 1, 1, 1, 'endless', [0]);
+    assert(
+      endless1.entries.length < gen1.entries.length,
+      `infinito conserva su oleada de siempre (${endless1.entries.length} cuerpos, arena ${gen1.entries.length})`,
+    );
+    const hpEndless = Math.round(ENEMIES.goblin.hp * waveHpMult(1, 'normal', 1));
+    assert(hpEndless === 32, `y su vida base no cambia (${hpEndless})`);
   }
 
   // 6. determinismo del modo entero

@@ -51,6 +51,7 @@ import {
   INTERLUDE_SEC,
   INVISIBLE_EVERY,
   INVISIBLE_FROM,
+  ARENA_HP_MULT,
   LEAK_WAVE_DIV,
   MAZE_STUN_EVERY_CELLS,
   POISON_PCT_CAP_DPS,
@@ -237,7 +238,11 @@ function spawnEnemy(
 ): EnemyState {
   const def = ENEMIES[type];
   const players = connectedCount(state);
-  const hpMult = waveHpMult(Math.max(1, state.wave), state.difficulty, players);
+  // ARENA · aguantan más: en un carril largo y laberintado, un monstruo con la
+  // vida estándar cae de un disparo y la oleada se deshace antes de llegar.
+  const hpMult =
+    waveHpMult(Math.max(1, state.wave), state.difficulty, players) *
+    (state.mode === 'arena' ? ARENA_HP_MULT : 1);
   // LABERINTO · sin portal: cada monstruo entra por un punto CUALQUIERA del
   // borde de arriba. Con un único punto de nacimiento el laberinto óptimo sería
   // siempre el mismo embudo; con el frente abierto hay que cubrirlo entero.
