@@ -162,6 +162,24 @@ export default {
       return json({ rooms: codes.length, delivered });
     }
 
+    // INVENTARIO de salas activas, PRIVADAS INCLUIDAS: el /api/rooms público solo
+    // enseña las que se listan en la portada, así que sin esto no había forma de
+    // saber qué salas hay vivas (el único rastro era el contador `rooms` del
+    // anuncio, que obliga a mandarle un chat a todo el mundo). Mismo candado que
+    // el resto de /api/admin/*; de solo lectura, no toca ninguna sala.
+    //   curl -H "Authorization: Bearer $ADMIN_TOKEN" \
+    //     https://fortaleza-td.bezenti.com/api/admin/rooms
+    if (url.pathname === '/api/admin/rooms' && request.method === 'GET') {
+      const token = env.ADMIN_TOKEN;
+      const auth = request.headers.get('authorization') ?? '';
+      if (!token || auth !== `Bearer ${token}`) return json({ error: 'no autorizado' }, 401);
+      const ns = env.DIRECTORY;
+      if (!ns) return json({ rooms: [] });
+      const res = await ns.get(ns.idFromName('v1')).fetch('https://do/all');
+      const rooms = (await res.json()) as unknown[];
+      return json({ total: rooms.length, rooms });
+    }
+
     // CERRAR una sala concreta a mano (moderación: una partida que hay que cortar,
     // una sala colgada que no se quiere esperar los 30 min del cierre por
     // inactividad). Mismo candado que el aviso: secreto ADMIN_TOKEN; sin secreto

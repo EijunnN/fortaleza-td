@@ -337,7 +337,11 @@ async function main(): Promise<void> {
   //     partida CONTINÚA desde donde estaba, sin enterarse.
   await durabilityScenario();
 
-  // 15. CIERRE ADMINISTRATIVO (/api/admin/close): cortar UNA sala concreta a mano
+  // 15. INVENTARIO ADMINISTRATIVO (/api/admin/rooms): ver TODAS las salas vivas,
+  //     también las privadas, que no asoman por el /api/rooms de la portada.
+  await adminRoomsScenario();
+
+  // 16. CIERRE ADMINISTRATIVO (/api/admin/close): cortar UNA sala concreta a mano
   //     (moderación) sin esperar los 30 min del cierre por inactividad. El candado
   //     del ADMIN_TOKEN se comprueba siempre; el cierre completo solo si el secreto
   //     está a mano (apps/worker/.dev.vars o variable de entorno).
@@ -1233,6 +1237,63 @@ function adminTokenForTests(): string {
     /* sin .dev.vars en esta máquina */
   }
   return '';
+}
+
+// INVENTARIO administrativo de salas (/api/admin/rooms). El /api/rooms de la portada
+// solo enseña las salas PÚBLICAS: una sala privada late en el directorio (para poder
+// recibir los avisos de despliegue) pero no sale por ninguna ruta pública, así que no
+// había forma de saber qué hay vivo sin mandarle un chat a todo el mundo. Verifica el
+// candado, que la privada NO sale en la portada y que el inventario SÍ la ve.
+async function adminRoomsScenario(): Promise<void> {
+  console.log('\n— Inventario administrativo: ver también las salas privadas —');
+
+  // sin `public: true`, la sala es privada
+  const host = new TestClient('InvHost', wsUrl({ create: true }));
+  await host.open();
+  host.send({
+    type: 'create_room',
+    name: 'Inés',
+    token: 'token-inv-host',
+    settings: { mapId: 'sendero', mode: 'classic', difficulty: 'normal' },
+  });
+  const rj = await host.waitFor('room_joined');
+  await host.waitFor('lobby_state');
+  await sleep(250); // el reporte al directorio es fire-and-forget
+
+  const portada = (await (await fetch(`${HTTP_BASE}/api/rooms`)).json()) as { code: string }[];
+  assert(
+    !portada.some((r) => r.code === rj.code),
+    `la sala privada ${rj.code} NO sale en el listado de la portada`,
+  );
+
+  const noAuth = await fetch(`${HTTP_BASE}/api/admin/rooms`);
+  assert(noAuth.status === 401, `sin ADMIN_TOKEN el inventario responde 401 (${noAuth.status})`);
+
+  const token = adminTokenForTests();
+  if (!token) {
+    console.log('   ⚠️  sin ADMIN_TOKEN (apps/worker/.dev.vars o variable de entorno): se salta el inventario real.');
+    host.ws.close();
+    await sleep(200);
+    return;
+  }
+
+  const res = await fetch(`${HTTP_BASE}/api/admin/rooms`, { headers: { authorization: `Bearer ${token}` } });
+  assert(res.ok, `el inventario autorizado responde OK (${res.status})`);
+  const inv = (await res.json()) as {
+    total: number;
+    rooms: { code: string; listed: boolean; seenMs: number; players: number }[];
+  };
+  const mia = inv.rooms.find((r) => r.code === rj.code);
+  assert(!!mia, `el inventario SÍ ve la sala privada ${rj.code}`);
+  assert(mia?.listed === false, 'la sala privada viene marcada como no listada');
+  assert(
+    typeof mia?.seenMs === 'number' && mia.seenMs < 45_000,
+    `y con un latido reciente, no fantasma (${mia?.seenMs} ms)`,
+  );
+  assert(inv.total === inv.rooms.length, `el total cuadra con las salas devueltas (${inv.total})`);
+
+  host.ws.close();
+  await sleep(200);
 }
 
 // CIERRE ADMINISTRATIVO de una sala concreta (/api/admin/close). Existe para poder
