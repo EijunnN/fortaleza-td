@@ -90,7 +90,16 @@ pnpm cf:deploy       # compila el cliente y sube el Worker
 
 Secretos opcionales (`npx wrangler secret put …` en `apps/worker/`, o el dashboard):
 - `DISCORD_CLIENT_SECRET` — habilita la **Discord Activity** (el Client ID público va en `vars`).
-- `ADMIN_TOKEN` — habilita `/api/admin/announce` (avisar a los conectados antes de un deploy).
+- `ADMIN_TOKEN` — habilita las dos rutas de administración:
+  - `/api/admin/announce` — avisar por chat a todos los conectados (lo usa el deploy).
+  - `/api/admin/close?code=XXXX` — **cerrar una sala concreta** sin esperar los 30 min de
+    inactividad: avisa del motivo por chat, echa a todos sin reconexión, la saca de la lista
+    pública y deja el código inservible (la partida no revive).
+    ```bash
+    curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" -H 'content-type: application/json' \
+      -d '{"reason":"🔒 Cerramos la sala por mantenimiento."}' \
+      "https://fortaleza-td.bezenti.com/api/admin/close?code=XXXX"
+    ```
 
 Mientras haya jugadores conectados la sala vive en memoria; si todos se van a la vez, se libera por
 inactividad. Las salas y récords sobreviven deploys normales; las partidas en curso se interrumpen

@@ -2,6 +2,7 @@
 // sala, empiezan la partida, colocan una torre, llaman la oleada y verifican
 // que los enemigos se mueven y el chat funciona.
 // Requiere el WORKER de Cloudflare corriendo (pnpm cf:dev y PORT=8787).
+import { readFileSync } from 'node:fs';
 import WebSocket from 'ws';
 import {
   BOOM_COST_TEAM_STEP,
@@ -41,6 +42,9 @@ class TestClient {
   name: string;
   msgs: ServerMsg[] = [];
   ticks: Extract<ServerMsg, { type: 'tick' }>[] = [];
+  // código con el que el servidor cerró el socket (4001 sala cerrada, 4002
+  // expulsado, 1012 reciclado del DO): el cliente real decide con él si reconecta.
+  closeCode: number | null = null;
 
   constructor(name: string, url: string) {
     this.name = name;
@@ -49,6 +53,9 @@ class TestClient {
       const msg = JSON.parse(String(raw)) as ServerMsg;
       if (msg.type === 'tick') this.ticks.push(msg);
       else this.msgs.push(msg);
+    });
+    this.ws.on('close', (code) => {
+      this.closeCode = code;
     });
   }
 
@@ -329,6 +336,12 @@ async function main(): Promise<void> {
   //     MISMOS jugadores reconectan a su MISMO slot (por token y por prevToken) y la
   //     partida CONTINÚA desde donde estaba, sin enterarse.
   await durabilityScenario();
+
+  // 15. CIERRE ADMINISTRATIVO (/api/admin/close): cortar UNA sala concreta a mano
+  //     (moderación) sin esperar los 30 min del cierre por inactividad. El candado
+  //     del ADMIN_TOKEN se comprueba siempre; el cierre completo solo si el secreto
+  //     está a mano (apps/worker/.dev.vars o variable de entorno).
+  await adminCloseScenario();
 
   if (failures.length > 0) {
     console.error(`\n💥 ${failures.length} fallos`);
@@ -1201,6 +1214,138 @@ async function durabilityScenario(): Promise<void> {
 
   host2.ws.close();
   p2b.ws.close();
+  await sleep(200);
+}
+
+// El ADMIN_TOKEN de desarrollo: la variable de entorno manda y si no se lee del
+// mismo apps/worker/.dev.vars que consume `wrangler dev` (gitignoreado, así que en
+// una máquina limpia no está y el escenario se queda solo con el candado).
+function adminTokenForTests(): string {
+  const fromEnv = (process.env.ADMIN_TOKEN ?? '').trim();
+  if (fromEnv) return fromEnv;
+  try {
+    const raw = readFileSync(new URL('../apps/worker/.dev.vars', import.meta.url), 'utf8');
+    for (const line of raw.split(/\r?\n/)) {
+      const m = /^\s*ADMIN_TOKEN\s*=\s*(.*)$/.exec(line);
+      if (m) return m[1].trim().replace(/^["']|["']$/g, '');
+    }
+  } catch {
+    /* sin .dev.vars en esta máquina */
+  }
+  return '';
+}
+
+// CIERRE ADMINISTRATIVO de una sala concreta (/api/admin/close). Existe para poder
+// cortar una partida a mano —moderación, una sala que hay que liberar— en vez de
+// esperar los 30 min del cierre por inactividad, que hasta ahora era el ÚNICO camino
+// que cerraba una sala de verdad. Verifica:
+//   (a) el candado: sin ADMIN_TOKEN o con uno equivocado, 401 y la sala ni se entera;
+//   (b) el motivo llega por chat ANTES del corte (el 4001 el cliente lo pinta como
+//       «cerrada por inactividad», así que el porqué real tiene que ir aparte);
+//   (c) los sockets cierran con 4001 — el único código, junto al 4002 del kick, que
+//       el cliente YA DESPLEGADO respeta sin auto-reconectar;
+//   (d) la sala sale del directorio público;
+//   (e) el código queda inservible: reentrar NO revive la partida (si solo se
+//       cortaran los sockets, la sala seguiría viva en la RAM del Durable Object).
+async function adminCloseScenario(): Promise<void> {
+  console.log('\n— Cierre administrativo: cortar una sala concreta a mano —');
+  const HOST_TOKEN = 'token-close-host';
+
+  // sala PÚBLICA con dos dentro (así se comprueba también el des-listado)
+  const host = new TestClient('CloseHost', wsUrl({ create: true }));
+  await host.open();
+  host.send({
+    type: 'create_room',
+    name: 'Carmen',
+    token: HOST_TOKEN,
+    settings: { mapId: 'sendero', mode: 'classic', difficulty: 'normal', public: true },
+  });
+  const rj = await host.waitFor('room_joined');
+  await host.waitFor('lobby_state');
+  const p2 = new TestClient('CloseP2', wsUrl({ code: rj.code }));
+  await p2.open();
+  p2.send({ type: 'join_room', name: 'Curro', token: 'token-close-p2', code: rj.code });
+  await p2.waitFor('room_joined');
+  await host.waitFor('lobby_state');
+
+  // ...y CON LA PARTIDA EN CURSO, que es el caso real: cerrar un lobby es fácil,
+  // cortar una partida a media oleada es lo que hay que hacer bien.
+  p2.send({ type: 'set_ready', ready: true });
+  for (;;) {
+    const lb = await host.waitFor('lobby_state');
+    if (lb.players.find((p) => !p.isHost)?.ready === true) break;
+  }
+  host.send({ type: 'start_game' });
+  await host.waitFor('countdown');
+  await host.waitFor('game_started', 6000);
+  await p2.waitFor('game_started', 6000);
+  host.send({ type: 'cmd', cmd: { kind: 'call_wave' } });
+  await sleep(1200);
+
+  await sleep(250); // el reporte al directorio es fire-and-forget
+  const listed = (await (await fetch(`${HTTP_BASE}/api/rooms`)).json()) as { code: string }[];
+  assert(
+    listed.some((r) => r.code === rj.code),
+    `la sala pública ${rj.code} aparece en el directorio antes del cierre`,
+  );
+
+  // (a) CANDADO
+  const noAuth = await fetch(`${HTTP_BASE}/api/admin/close?code=${rj.code}`, { method: 'POST' });
+  assert(noAuth.status === 401, `sin ADMIN_TOKEN el cierre responde 401 (${noAuth.status})`);
+  const badAuth = await fetch(`${HTTP_BASE}/api/admin/close?code=${rj.code}`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer no-soy-el-token' },
+  });
+  assert(badAuth.status === 401, `con un token equivocado responde 401 (${badAuth.status})`);
+  await sleep(150);
+  assert(host.closeCode === null && p2.closeCode === null, 'un intento no autorizado NO toca la sala');
+
+  const token = adminTokenForTests();
+  if (!token) {
+    console.log('   ⚠️  sin ADMIN_TOKEN (apps/worker/.dev.vars o variable de entorno): se salta el cierre real.');
+    console.log('   Para ejecutarlo, añade ADMIN_TOKEN=loquesea a apps/worker/.dev.vars y reinicia el worker.');
+    host.ws.close();
+    p2.ws.close();
+    await sleep(200);
+    return;
+  }
+
+  // (b) CIERRE REAL
+  const res = await fetch(`${HTTP_BASE}/api/admin/close?code=${rj.code}`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ reason: '🔒 Cerramos esta sala para probar el cierre.' }),
+  });
+  assert(res.ok, `el cierre autorizado responde OK (${res.status})`);
+  const out = (await res.json()) as { ok: boolean; code: string; closed: number; inGame: boolean; wave: number };
+  assert(out.code === rj.code, `informa de la sala cerrada (${out.code})`);
+  assert(out.closed === 2, `informa de los 2 conectados que echó (${out.closed})`);
+  assert(out.inGame === true && out.wave >= 1, `informa de la partida que cortó (oleada ${out.wave})`);
+
+  await sleep(400);
+  const chats = host.msgs.filter((m) => m.type === 'chat') as Extract<ServerMsg, { type: 'chat' }>[];
+  assert(
+    chats.some((c) => c.from === '📢 Aviso' && /Cerramos esta sala/.test(c.text)),
+    'los de dentro reciben el motivo por chat antes del corte',
+  );
+  assert(
+    host.closeCode === 4001 && p2.closeCode === 4001,
+    `los dos sockets cierran con 4001, que el cliente no reconecta (${host.closeCode}/${p2.closeCode})`,
+  );
+
+  const after = (await (await fetch(`${HTTP_BASE}/api/rooms`)).json()) as { code: string }[];
+  assert(
+    !after.some((r) => r.code === rj.code),
+    'la sala cerrada desaparece del directorio de salas públicas',
+  );
+
+  // (e) el código ya no vale: ni el propio anfitrión, con su token, revive la sala
+  const zombie = new TestClient('CloseZombie', wsUrl({ code: rj.code }));
+  await zombie.open();
+  zombie.send({ type: 'join_room', name: 'Carmen', token: HOST_TOKEN, code: rj.code });
+  const err = await zombie.waitFor('error');
+  assert(/no existe la sala/i.test(err.msg), `reentrar con el código no revive la sala ("${err.msg}")`);
+  zombie.ws.close();
   await sleep(200);
 }
 
