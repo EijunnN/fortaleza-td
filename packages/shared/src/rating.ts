@@ -128,6 +128,119 @@ export function rateMatch(entries: RatedEntry[]): RatingResult[] {
   });
 }
 
+// ---------- RANGOS · la medalla que se enseña ----------
+//
+// El número crudo se guarda pero NO se enseña: con partidas que mueven 12-24
+// puntos, un MMR a la vista se lee como ruido y la gente juega mirando el número
+// en vez del juego. Lo que se enseña es una MEDALLA con ESTRELLAS, al estilo de
+// los sistemas de rango por divisiones: cada rango vale 200 puntos y cada una de
+// sus 5 estrellas 40, así que 2-3 partidas ganadas encienden una estrella — hay
+// avance visible casi cada sesión, y aun así subir de medalla cuesta. Al llenar
+// la quinta estrella se pasa al rango siguiente.
+//
+// El último rango, INMORTAL, funciona distinto y a propósito: no tiene estrellas
+// sino PUESTO. Quien más puntos tiene es el Inmortal 1, el siguiente el 2, y así.
+// Como el orden se recalcula por puntos, el puesto se lo puede quitar cualquiera
+// en su siguiente partida — que es justo lo que hace que la cima siga en juego.
+export const RANK_STARS = 5;
+export const RANK_WIDTH = 200;
+
+export interface RankTier {
+  id: string;
+  name: string;
+  min: number; // rating a partir del cual empieza este rango
+}
+
+// De menor a mayor. El primero recoge todo lo que baje del segundo (hasta el
+// suelo) y el último —INMORTAL— es abierto por arriba y no tiene estrellas.
+//
+// La escala está puesta para que quien EMPIEZA caiga en Arconte ★★★: en mitad de
+// los rangos con estrellas, pero con tres escalones y el Inmortal por encima. Un
+// sistema donde arrancas ya en el nombre más vistoso no deja a dónde subir.
+// Heraldo es más ancho que el resto a propósito: es el pozo del que cuesta salir.
+export const RANKS: RankTier[] = [
+  { id: 'heraldo', name: 'Heraldo', min: RATING_FLOOR },
+  { id: 'guardian', name: 'Guardián', min: 700 },
+  { id: 'arconte', name: 'Arconte', min: 900 },
+  { id: 'leyenda', name: 'Leyenda', min: 1100 },
+  { id: 'ancestral', name: 'Ancestral', min: 1300 },
+  { id: 'divino', name: 'Divino', min: 1500 },
+  { id: 'inmortal', name: 'Inmortal', min: 1700 },
+];
+
+// Índice del rango más alto (el único sin estrellas y con puesto numérico).
+export const IMMORTAL_TIER = RANKS.length - 1;
+
+export interface RankBadge {
+  tier: number; // índice en RANKS
+  id: string;
+  name: string;
+  stars: number; // 1..RANK_STARS; 0 en Inmortal (no tiene divisiones)
+  provisional: boolean; // aún calibrando: no hay medalla que enseñar
+  games: number;
+  // INMORTAL · puesto en la clasificación de inmortales (1 = el que más puntos
+  // tiene). null si no es inmortal o si aún no se ha consultado la tabla: el
+  // puesto no se puede deducir del rating de uno solo, hay que mirarlos a todos.
+  position: number | null;
+}
+
+// Medalla de un jugador. Durante la calibración NO se devuelve rango: enseñar una
+// medalla que va a saltar tres escalones en las próximas partidas es peor que no
+// enseñar ninguna. La UI pinta «Calibrando 4/10» con lo que hay en `games`.
+//
+// `position` solo se usa en Inmortal y lo aporta quien haya leído la tabla (ver
+// immortalPositions): el puesto es RELATIVO al resto, así que esta función no
+// puede calcularlo sola.
+export function rankOf(rating: number, games: number, position: number | null = null): RankBadge {
+  const provisional = games < PROVISIONAL_GAMES;
+  let tier = 0;
+  for (let i = RANKS.length - 1; i >= 0; i--) {
+    if (rating >= RANKS[i].min) {
+      tier = i;
+      break;
+    }
+  }
+  const top = tier === IMMORTAL_TIER;
+  const desde = RANKS[tier].min;
+  const ancho = top ? RANK_WIDTH : RANKS[tier + 1].min - desde;
+  const stars = top
+    ? 0
+    : Math.max(1, Math.min(RANK_STARS, 1 + Math.floor(((rating - desde) / ancho) * RANK_STARS)));
+  return {
+    tier,
+    id: RANKS[tier].id,
+    name: RANKS[tier].name,
+    stars,
+    provisional,
+    games,
+    position: top ? position : null,
+  };
+}
+
+// Cómo se escribe una medalla: «Arconte ★★★» o «Inmortal 4». El Inmortal se
+// nombra por su PUESTO, no por estrellas — es la gracia del rango.
+export function rankLabel(badge: RankBadge): string {
+  if (badge.provisional) return `Calibrando ${badge.games}/${PROVISIONAL_GAMES}`;
+  if (badge.tier === IMMORTAL_TIER) return badge.position ? `Inmortal ${badge.position}` : 'Inmortal';
+  return `${badge.name} ${'★'.repeat(badge.stars)}`;
+}
+
+// INMORTAL · reparte los puestos. Se ordena por PUNTOS, así que el puesto no es
+// un trofeo que se conserva: si el Inmortal 2 adelanta en puntos al 1, en la
+// siguiente partida son 1 y 2 al revés, sin que nadie tenga que hacer nada. Los
+// empates a puntos se deshacen por quien llegó antes a inmortal (`since`), que es
+// estable y no depende del orden en que venga la lista.
+export function immortalPositions(
+  jugadores: { pid: string; rating: number; since: number }[],
+): Map<string, number> {
+  const inmortales = jugadores
+    .filter((j) => j.rating >= RANKS[IMMORTAL_TIER].min)
+    .sort((a, b) => b.rating - a.rating || a.since - b.since || (a.pid < b.pid ? -1 : 1));
+  const out = new Map<string, number>();
+  inmortales.forEach((j, i) => out.set(j.pid, i + 1));
+  return out;
+}
+
 // ¿Esta partida puntúa? Reglas duras, todas por el mismo motivo: que el rating
 // mida jugar bien y no montar el escenario que te conviene.
 //   · solo ARENA (es el único modo que clasifica comparando carriles);

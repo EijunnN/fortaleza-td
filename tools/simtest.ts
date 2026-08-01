@@ -45,10 +45,16 @@ import {
   ADAPT_HITS,
   ADAPT_RESIST,
   arenaPlaces,
+  immortalPositions,
   isRankedArena,
   K_ESTABLISHED,
   K_PROVISIONAL,
   LADDER_MIN_PLAYERS,
+  PROVISIONAL_GAMES,
+  RANK_STARS,
+  RANK_WIDTH,
+  rankLabel,
+  rankOf,
   RATING_FLOOR,
   RATING_START,
   rateMatch,
@@ -4621,6 +4627,74 @@ console.log('— ARENA · parcelas, oleada espejo, aislamiento y eliminación �
     assert(
       !isRankedArena({ mode: 'arena', turbo: false, publicRoom: true, pids: ['a', 'b', ''] }),
       'un invitado sin identidad no rellena el cupo',
+    );
+
+    // (h) RANGOS: la medalla que se enseña en vez del número crudo.
+    assert(rankOf(RATING_START, 0).provisional, 'con 0 partidas se está CALIBRANDO (no hay medalla que enseñar)');
+    assert(
+      rankLabel(rankOf(RATING_START, 4)) === `Calibrando 4/${PROVISIONAL_GAMES}`,
+      'y se dice cuánto falta para tenerla',
+    );
+    assert(!rankOf(RATING_START, PROVISIONAL_GAMES).provisional, `a las ${PROVISIONAL_GAMES} partidas ya hay medalla`);
+    const arranque = rankOf(RATING_START, 50);
+    assert(
+      arranque.id === 'arconte' && arranque.stars === 3,
+      `quien empieza cae en mitad de la tabla, con sitio para subir: ${rankLabel(arranque)}`,
+    );
+    assert(rankOf(RATING_FLOOR, 50).id === 'heraldo', 'el suelo es Heraldo');
+    // cada estrella son RANK_WIDTH/RANK_STARS = 40 puntos: 1100 → ★, 1140 → ★★…
+    assert(rankLabel(rankOf(1100, 50)) === 'Leyenda ★', 'la etiqueta va con estrellas hasta Divino');
+    assert(rankLabel(rankOf(1140, 50)) === 'Leyenda ★★', 'y cada 40 puntos se enciende la siguiente');
+
+    // monotonía: subir de rating jamás puede bajarte de medalla ni de estrella
+    let ultimo = -1;
+    let monotona = true;
+    for (let r = RATING_FLOOR; r <= 2000; r += 5) {
+      const b = rankOf(r, 50);
+      const peso = b.tier * (RANK_STARS + 1) + b.stars;
+      if (peso < ultimo) monotona = false;
+      ultimo = peso;
+    }
+    assert(monotona, 'la medalla nunca retrocede al subir el rating (100 → 2000)');
+    const c1 = rankOf(900, 50);
+    const c5 = rankOf(900 + RANK_WIDTH - 1, 50);
+    assert(c1.stars === 1 && c5.stars === RANK_STARS, `un rango entero son ${RANK_STARS} estrellas (${RANK_WIDTH} puntos)`);
+
+    // (i) INMORTAL: sin estrellas y con PUESTO, repartido por puntos.
+    const cima = rankOf(9999, 50);
+    assert(cima.id === 'inmortal' && cima.stars === 0, 'Inmortal no tiene divisiones (0 estrellas)');
+    const tabla = [
+      { pid: 'segundo', rating: 1800, since: 10 },
+      { pid: 'primero', rating: 2100, since: 99 },
+      { pid: 'tercero', rating: 1750, since: 1 },
+      { pid: 'divino', rating: 1600, since: 5 }, // no llega a inmortal
+    ];
+    const puestos = immortalPositions(tabla);
+    assert(puestos.get('primero') === 1, 'el Inmortal 1 es el que MÁS puntos tiene, no el que llegó antes');
+    assert(puestos.get('segundo') === 2 && puestos.get('tercero') === 3, 'y el resto se ordena por puntos detrás');
+    assert(!puestos.has('divino'), 'quien no llega al corte no ocupa puesto de inmortal');
+    assert(rankLabel(rankOf(2100, 50, 1)) === 'Inmortal 1', 'la medalla se nombra por el puesto');
+
+    // el puesto NO es un trofeo que se conserva: basta con adelantar en puntos
+    const trasRemontada = immortalPositions([
+      { pid: 'segundo', rating: 2200, since: 10 }, // ganó y adelantó al de arriba
+      { pid: 'primero', rating: 2100, since: 99 },
+    ]);
+    assert(
+      trasRemontada.get('segundo') === 1 && trasRemontada.get('primero') === 2,
+      'quien adelanta en puntos le quita el puesto al Inmortal 1 sin más trámite',
+    );
+    // empate a puntos: manda quien llegó antes a inmortal (y es estable, no
+    // depende del orden en que venga la lista)
+    const empatados = [
+      { pid: 'nuevo', rating: 2000, since: 50 },
+      { pid: 'veterano', rating: 2000, since: 3 },
+    ];
+    const e1 = immortalPositions(empatados);
+    const e2 = immortalPositions([...empatados].reverse());
+    assert(
+      e1.get('veterano') === 1 && e2.get('veterano') === 1,
+      'a igualdad de puntos manda quien llegó antes, venga como venga la lista',
     );
   }
 }
