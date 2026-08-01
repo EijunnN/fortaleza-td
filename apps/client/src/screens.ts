@@ -1,4 +1,5 @@
 import {
+  arenaPlaces,
   MAPS,
   MULTI_DOOR_MIN,
   type EndStats,
@@ -1180,14 +1181,19 @@ function dropConfetti(overlay: HTMLElement): void {
 // ARENA · orden final: primero quien llegó más lejos; a igualdad de oleada, quien
 // aguantó más tiempo dentro de ella. El superviviente va siempre el primero — no
 // tiene tick de caída porque no cayó.
+// El orden del podio lo decide arenaPlaces (@td/shared): el MISMO criterio que
+// puntúa en el ladder, para que lo que se pinta aquí y lo que mueve el rating no
+// puedan divergir. Aquí solo se traduce el puesto a una lista ordenada.
 function arenaRanking(stats: EndStats): EndStatsPlayer[] {
-  return [...stats.players].sort((a, b) => {
-    if (!a.eliminated !== !b.eliminated) return a.eliminated ? 1 : -1;
-    const wa = a.waveReached ?? 0;
-    const wb = b.waveReached ?? 0;
-    if (wa !== wb) return wb - wa;
-    return (b.eliminatedTick ?? 0) - (a.eliminatedTick ?? 0);
-  });
+  const places = arenaPlaces(
+    stats.players.map((p) => ({
+      pid: p.id,
+      eliminated: p.eliminated === true,
+      waveReached: p.waveReached ?? 0,
+      eliminatedTick: p.eliminatedTick ?? 0,
+    })),
+  );
+  return [...stats.players].sort((a, b) => (places.get(a.id) ?? 0) - (places.get(b.id) ?? 0));
 }
 
 export function hideEnd(): void {

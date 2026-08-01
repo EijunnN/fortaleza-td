@@ -44,6 +44,14 @@ import {
   waveHpMult,
   ADAPT_HITS,
   ADAPT_RESIST,
+  arenaPlaces,
+  isRankedArena,
+  K_ESTABLISHED,
+  K_PROVISIONAL,
+  LADDER_MIN_PLAYERS,
+  RATING_FLOOR,
+  RATING_START,
+  rateMatch,
   ASSIST_MIN_DMG_FRAC,
   ASSIST_SHARE,
   ATTACK_MATRIX,
@@ -4505,6 +4513,116 @@ console.log('— ARENA · parcelas, oleada espejo, aislamiento y eliminación �
     s.enemies.map((e) => [e.id, e.pathIdx, Math.round(e.x * 1e6), Math.round(e.y * 1e6), e.hp]),
   ]);
   assert(firma(a1) === firma(a2), 'la arena es determinista');
+
+  // ==================== LADDER · rating de arena (Elo por pares) ====================
+  // Fórmula pura: entra el podio + los ratings previos, sale cuánto se mueve cada
+  // uno. Se prueba aquí (sin worker ni base de datos) porque es el corazón del
+  // ladder: si esto se tuerce, el número que ve la gente miente.
+  console.log('\n— Ladder de arena: podio, Elo por pares y elegibilidad —');
+  {
+    // (a) PODIO. Mismo criterio que la pantalla de fin: en pie > más oleada >
+    //     aguantar más dentro de la oleada. Los empates comparten puesto.
+    const podio = arenaPlaces([
+      { pid: 'muerto-pronto', eliminated: true, waveReached: 5, eliminatedTick: 900 },
+      { pid: 'vivo', eliminated: false, waveReached: 12, eliminatedTick: 0 },
+      { pid: 'muerto-tarde', eliminated: true, waveReached: 9, eliminatedTick: 4000 },
+      { pid: 'misma-oleada', eliminated: true, waveReached: 9, eliminatedTick: 5200 },
+    ]);
+    assert(podio.get('vivo') === 1, 'el que sigue en pie es primero');
+    assert(podio.get('misma-oleada') === 2, 'a igualdad de oleada gana quien aguantó más dentro de ella');
+    assert(podio.get('muerto-tarde') === 3, '…y el que cayó antes en esa misma oleada va detrás');
+    assert(podio.get('muerto-pronto') === 4, 'el que llegó a menos oleada cierra la tabla');
+    const empate = arenaPlaces([
+      { pid: 'a', eliminated: true, waveReached: 7, eliminatedTick: 100 },
+      { pid: 'b', eliminated: true, waveReached: 7, eliminatedTick: 100 },
+      { pid: 'c', eliminated: true, waveReached: 3, eliminatedTick: 50 },
+    ]);
+    assert(empate.get('a') === 1 && empate.get('b') === 1, 'un empate exacto comparte puesto');
+    assert(empate.get('c') === 3, 'y el siguiente salta al 3º (1, 1, 3 — no 1, 1, 2)');
+
+    // (b) SUMA CERO entre establecidos: el rating no se crea ni se destruye, solo
+    //     cambia de manos. Es lo que impide que el número se infle con el tiempo.
+    const establecidos = [
+      { pid: 'p1', rating: 1200, games: 50, place: 1 },
+      { pid: 'p2', rating: 1000, games: 30, place: 2 },
+      { pid: 'p3', rating: 900, games: 80, place: 3 },
+      { pid: 'p4', rating: 1100, games: 25, place: 4 },
+    ];
+    const res = rateMatch(establecidos);
+    const suma = res.reduce((acc, r) => acc + r.delta, 0);
+    assert(Math.abs(suma) <= 2, `entre establecidos la suma de deltas es cero (redondeo aparte: ${suma})`);
+    assert(res[0].delta > 0 && res[3].delta < 0, 'el primero sube y el último baja');
+
+    // (c) SORPRESA vs RESULTADO ESPERADO: ganar a quien ya se te suponía inferior
+    //     mueve poco; que el peor del grupo gane, mucho.
+    const esperado = rateMatch([
+      { pid: 'favorito', rating: 1600, games: 50, place: 1 },
+      { pid: 'tapado', rating: 900, games: 50, place: 2 },
+    ]);
+    const sorpresa = rateMatch([
+      { pid: 'favorito', rating: 1600, games: 50, place: 2 },
+      { pid: 'tapado', rating: 900, games: 50, place: 1 },
+    ]);
+    const gananciaEsperada = esperado.find((r) => r.pid === 'favorito')!.delta;
+    const gananciaSorpresa = sorpresa.find((r) => r.pid === 'tapado')!.delta;
+    assert(
+      gananciaSorpresa > gananciaEsperada * 4,
+      `dar la sorpresa paga mucho más que cumplir el pronóstico (${gananciaSorpresa} vs ${gananciaEsperada})`,
+    );
+
+    // (d) PROVISIONAL: las primeras partidas mueven más (converges rápido a tu
+    //     nivel real en vez de contaminar los duelos de los demás medio año).
+    const novato = rateMatch([
+      { pid: 'novato', rating: RATING_START, games: 0, place: 1 },
+      { pid: 'veterano', rating: RATING_START, games: 99, place: 2 },
+    ]);
+    const dNovato = novato.find((r) => r.pid === 'novato')!.delta;
+    const dVeterano = novato.find((r) => r.pid === 'veterano')!.delta;
+    assert(dNovato > Math.abs(dVeterano), `el provisional se mueve más que el establecido (${dNovato} vs ${dVeterano})`);
+    assert(novato[0].k === K_PROVISIONAL && novato[1].k === K_ESTABLISHED, 'cada uno con su K');
+
+    // (e) SUELO: por muchas palizas que te lleves, el número no cae al absurdo.
+    let hundido = RATING_FLOOR + 30;
+    for (let i = 0; i < 40; i++) {
+      hundido = rateMatch([
+        { pid: 'yo', rating: hundido, games: 99, place: 3 },
+        { pid: 'a', rating: 1500, games: 99, place: 1 },
+        { pid: 'b', rating: 1500, games: 99, place: 2 },
+      ])[0].after;
+    }
+    assert(hundido >= RATING_FLOOR, `el rating nunca baja del suelo (${hundido} >= ${RATING_FLOOR})`);
+
+    // (f) UNA SOLA PARTIDA no puede con la fase provisional entera: aunque ganes,
+    //     el salto está acotado por K (nadie llega a lo más alto en una tarde).
+    const salto = rateMatch([
+      { pid: 'yo', rating: RATING_START, games: 0, place: 1 },
+      { pid: 'x', rating: 2000, games: 99, place: 2 },
+      { pid: 'y', rating: 2000, games: 99, place: 3 },
+    ])[0].delta;
+    assert(salto <= K_PROVISIONAL, `ni la mejor partida posible sube más de K (${salto} <= ${K_PROVISIONAL})`);
+
+    // (g) ELEGIBILIDAD: el rating mide jugar bien, no montarte el escenario.
+    const pids = ['a', 'b', 'c'];
+    assert(
+      isRankedArena({ mode: 'arena', turbo: false, publicRoom: true, pids }),
+      'una arena pública con 3 identidades distintas puntúa',
+    );
+    assert(!isRankedArena({ mode: 'endless', turbo: false, publicRoom: true, pids }), 'el infinito NO puntúa en el ladder de arena');
+    assert(!isRankedArena({ mode: 'arena', turbo: true, publicRoom: true, pids }), 'una arena en turbo no puntúa');
+    assert(!isRankedArena({ mode: 'arena', turbo: false, publicRoom: false, pids }), 'una sala privada no puntúa (te eliges los rivales)');
+    assert(
+      !isRankedArena({ mode: 'arena', turbo: false, publicRoom: true, pids: ['a', 'b'] }),
+      `hacen falta ${LADDER_MIN_PLAYERS} identidades: con 2 el farmeo es abrir una ventana de incógnito`,
+    );
+    assert(
+      !isRankedArena({ mode: 'arena', turbo: false, publicRoom: true, pids: ['a', 'a', 'a', 'b'] }),
+      'y son identidades DISTINTAS: cuatro pestañas del mismo dispositivo no cuentan como cuatro',
+    );
+    assert(
+      !isRankedArena({ mode: 'arena', turbo: false, publicRoom: true, pids: ['a', 'b', ''] }),
+      'un invitado sin identidad no rellena el cupo',
+    );
+  }
 }
 
 console.log('— Determinismo: misma semilla + mismos comandos → mismo estado —');
