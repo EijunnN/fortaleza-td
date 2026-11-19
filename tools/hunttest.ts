@@ -2,7 +2,10 @@
 // No mide diversión; comprueba que las reglas hacen lo que dicen.
 import {
   HUNT,
+  HUNT_BOT,
   TICK_RATE,
+  createHuntBotMemory,
+  huntBotCommands,
   buildHuntSnap,
   createHunt,
   filterHuntEvents,
@@ -172,6 +175,49 @@ console.log('caza y final');
   assert(Math.abs(c.x - x0) > 5, 'el colono salta');
   const r = run(st, 1, [{ playerId: 'p2', cmd: { k: 'blink', x: c.x + 3, y: c.y } }]);
   assert(r.some((e) => e.e === 'reject'), 'y el salto queda en recarga');
+}
+
+console.log('bot cazador');
+{
+  const solo = [{ id: 'p2', name: 'Ana', color: '#0f0' }, HUNT_BOT];
+  const play = (st: HuntState, seconds: number, each?: (t: number) => HuntPlayerCommand[]) => {
+    const mem = createHuntBotMemory();
+    for (let i = 0; i < sec(seconds) && !st.over; i++) {
+      const cmds: HuntPlayerCommand[] = each ? each(i) : [];
+      for (const cmd of huntBotCommands(st, mem)) cmds.push({ playerId: HUNT_BOT.id, cmd });
+      stepHunt(st, cmds);
+    }
+    return mem;
+  };
+  // un colono que se queda quieto junto a la guarida no dura nada
+  const st1 = createHunt(11, solo, HUNT_BOT.id);
+  play(st1, HUNT.RELEASE_SEC + 15);
+  assert(st1.over?.winner === 'hunter', 'el bot caza a un colono que no se mueve');
+
+  // un colono encerrado: el bot encuentra la base, golpea la muralla y va a comprar
+  const st2 = createHunt(12, solo, HUNT_BOT.id);
+  const base = map.bases[4];
+  const bot = st2.players.find((p) => p.id === HUNT_BOT.id)!;
+  const ana = st2.players.find((p) => p.id === 'p2')!;
+  const mem = play(st2, 240, (t) => {
+    if (t === 0) return [{ playerId: 'p2', cmd: { k: 'move', x: base.x + 4.5, y: base.y + 3.5 } }];
+    if (t === sec(20)) {
+      return [
+        { playerId: 'p2', cmd: { k: 'build', type: 'wall', cx: base.door.x, cy: base.door.y } },
+        { playerId: 'p2', cmd: { k: 'build', type: 'treasury', cx: base.x + 2, cy: base.y + 3 } },
+      ];
+    }
+    // sube la muralla cada vez que puede, como haría una persona
+    if (t % sec(3) === 0) {
+      const wall = st2.buildings.find((b) => b.type === 'wall');
+      if (wall && ana.gold >= 8 * 2 ** (wall.level - 1)) return [{ playerId: 'p2', cmd: { k: 'upgrade', id: wall.id } }];
+    }
+    return [];
+  });
+  assert(mem.known.size > 0 || st2.over !== null, 'el bot localiza la base del colono');
+  assert(bot.damage > 0, 'y golpea sus edificios');
+  assert(bot.weapon > 0 || st2.over !== null, 'con el oro que saca, vuelve y compra garras');
+  console.log(`    (4 min: garras ${bot.weapon}, pellejo ${bot.vitality}, oro ${Math.floor(bot.gold)}, fin ${st2.over?.winner ?? 'sigue'})`);
 }
 
 console.log(failed === 0 ? '\nTODO OK' : `\n${failed} FALLOS`);

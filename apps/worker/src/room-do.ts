@@ -36,7 +36,11 @@ import {
 import { saveScore } from './scores.js';
 import {
   HUNT,
+  HUNT_BOT,
   buildHuntSnap,
+  createHuntBotMemory,
+  huntBotCommands,
+  type HuntBotMemory,
   createHunt,
   filterHuntEvents,
   huntResult,
@@ -277,6 +281,8 @@ export class RoomDO {
   // la sala vuelve al lobby.
   private hunt: HuntState | null = null;
   private huntCmds: HuntPlayerCommand[] = [];
+  // memoria del BOT cazador (solo cuando se juega sin nadie más)
+  private huntBot: HuntBotMemory | null = null;
   // cuántas veces ha sido cazador cada token en esta sala, para ir rotando
   private huntTurns = new Map<string, number>();
   private loop: ReturnType<typeof setInterval> | null = null;
@@ -1640,16 +1646,21 @@ export class RoomDO {
   private startHunt(): void {
     const roster = this.players.filter((p) => p.ws);
     if (roster.length < HUNT.MIN_PLAYERS) return;
-    // el cazador ROTA: le toca a quien menos veces lo haya sido en esta sala
-    const least = Math.min(...roster.map((p) => this.huntTurns.get(p.token) ?? 0));
-    const candidates = roster.filter((p) => (this.huntTurns.get(p.token) ?? 0) === least);
-    const hunter = candidates[Math.floor(Math.random() * candidates.length)];
-    this.huntTurns.set(hunter.token, least + 1);
-    this.hunt = createHunt(
-      (Math.random() * 0xffffffff) | 0,
-      roster.map((p) => ({ id: p.id, name: p.name, color: p.color })),
-      hunter.id,
-    );
+    const humans = roster.map((p) => ({ id: p.id, name: p.name, color: p.color }));
+    const seed = (Math.random() * 0xffffffff) | 0;
+    if (roster.length === 1) {
+      // sin nadie más con quien jugar: el cazador lo lleva el bot
+      this.huntBot = createHuntBotMemory();
+      this.hunt = createHunt(seed, [...humans, HUNT_BOT], HUNT_BOT.id);
+    } else {
+      // el cazador ROTA: le toca a quien menos veces lo haya sido en esta sala
+      const least = Math.min(...roster.map((p) => this.huntTurns.get(p.token) ?? 0));
+      const candidates = roster.filter((p) => (this.huntTurns.get(p.token) ?? 0) === least);
+      const hunter = candidates[Math.floor(Math.random() * candidates.length)];
+      this.huntTurns.set(hunter.token, least + 1);
+      this.huntBot = null;
+      this.hunt = createHunt(seed, humans, hunter.id);
+    }
     this.huntCmds = [];
     this.paused = false;
     this.speed = 1;
@@ -1677,6 +1688,9 @@ export class RoomDO {
       const cmds = this.huntCmds;
       this.huntCmds = [];
       const wasOver = h.over !== null;
+      if (this.huntBot) {
+        for (const cmd of huntBotCommands(h, this.huntBot)) cmds.push({ playerId: HUNT_BOT.id, cmd });
+      }
       const events = stepHunt(h, cmds);
       // cada uno recibe SOLO lo que ve: la niebla se decide aquí, no en el cliente
       for (const p of this.players) {
@@ -2332,7 +2346,7 @@ export class RoomDO {
         if (this.hunt || (this.game && !this.game.over)) break;
         if (this.startTimer) break; // ya en cuenta atrás
         if (this.settings.mode === 'hunt' && this.players.filter((p) => p.ws).length < HUNT.MIN_PLAYERS) {
-          this.send(player, { type: 'error', msg: 'La Cacería necesita al menos 2 jugadores: un cazador y un colono' });
+          this.send(player, { type: 'error', msg: 'No hay jugadores conectados para la Cacería' });
           break;
         }
         // REANUDAR un guardado: sin gate de «Listo» (el anfitrión decide). Al llegar

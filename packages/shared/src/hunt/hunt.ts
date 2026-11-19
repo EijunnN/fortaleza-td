@@ -27,7 +27,7 @@ export const HUNT = {
   H: 40,
   RELEASE_SEC: 30,
   TIME_LIMIT_SEC: 12 * 60,
-  MIN_PLAYERS: 2,
+  MIN_PLAYERS: 1, // con uno solo, el cazador lo lleva el bot (ver huntBotCommands)
   hunter: {
     hp: 500,
     dmg: 5,
@@ -1249,4 +1249,131 @@ export function huntResult(state: HuntState): HuntResult {
       built: p.built,
     })),
   };
+}
+
+// ---------- BOT cazador ----------
+//
+// Para jugar sin nadie más: el cazador lo lleva la máquina. Juega con lo que VE
+// (misma niebla que un jugador) y recuerda los edificios que ya vio. Decide una
+// vez por segundo:
+//   1. malherido → vuelve a la guarida, se cura y compra;
+//   2. con oro para la siguiente mejora de garras → va a comprarla;
+//   3. un colono a la vista y alcanzable → a por él;
+//   4. edificios conocidos → primero la Muralla más cercana (es la puerta), si no
+//      lo que tenga más a mano;
+//   5. no sabe nada → usa el rastreo o patrulla las bases.
+
+export const HUNT_BOT_ID = 'bot';
+export const HUNT_BOT = { id: HUNT_BOT_ID, name: 'Bestia', color: '#ff5a4e' };
+
+export interface HuntBotMemory {
+  known: Map<number, { cx: number; cy: number; type: HuntBuildingType }>;
+  patrol: number;
+  retreating: boolean;
+}
+
+export function createHuntBotMemory(): HuntBotMemory {
+  return { known: new Map(), patrol: 0, retreating: false };
+}
+
+export function huntBotCommands(state: HuntState, mem: HuntBotMemory): HuntCommand[] {
+  const p = playerOf(state, HUNT_BOT_ID);
+  const u = huntHunterUnit(state);
+  if (!p || !u || !u.alive || state.over || state.tick < state.releaseTick) return [];
+  if (state.tick % TICK_RATE !== 0) return [];
+  const map = getHuntMap();
+  const out: HuntCommand[] = [];
+  const v = huntVision(state, HUNT_BOT_ID);
+
+  // memoria: apunta lo que ve y olvida lo que ya no está donde lo dejó
+  for (const b of state.buildings) {
+    if (sees(v, b.cx + 0.5, b.cy + 0.5)) mem.known.set(b.id, { cx: b.cx, cy: b.cy, type: b.type });
+  }
+  for (const [id, k] of mem.known) {
+    if (!state.buildings.some((b) => b.id === id) && sees(v, k.cx + 0.5, k.cy + 0.5)) mem.known.delete(id);
+  }
+
+  if (p.channelEnd > 0) return out; // volviendo a la guarida: no tocar nada
+  const campX = map.camp.x + 0.5;
+  const campY = map.camp.y + 1.5;
+  const atCamp = Math.hypot(u.x - (map.camp.x + 0.5), u.y - (map.camp.y + 0.5)) <= HUNT.hunter.campRadius;
+  const frac = u.hp / u.maxHp;
+  const goHome = (): void => {
+    if (state.tick >= p.recallReady && Math.hypot(u.x - campX, u.y - campY) > 12) out.push({ k: 'recall' });
+    else out.push({ k: 'move', x: campX, y: campY });
+  };
+
+  if (atCamp) {
+    // compra todo lo que pueda: garras primero, pellejo para no ir de cristal
+    let gold = p.gold;
+    let w = p.weapon;
+    let vit = p.vitality;
+    let boots = p.boots;
+    for (let i = 0; i < 6; i++) {
+      const wc = huntItemCost('weapon', w);
+      const vc = huntItemCost('vitality', vit);
+      if (vit < w && vc > 0 && gold >= vc) {
+        out.push({ k: 'buy', item: 'vitality' });
+        gold -= vc;
+        vit++;
+      } else if (wc > 0 && gold >= wc) {
+        out.push({ k: 'buy', item: 'weapon' });
+        gold -= wc;
+        w++;
+      } else if (boots === 0 && gold >= huntItemCost('boots', 0) + 200) {
+        out.push({ k: 'buy', item: 'boots' });
+        gold -= huntItemCost('boots', 0);
+        boots++;
+      } else break;
+    }
+    if (frac >= 0.92) mem.retreating = false;
+    if (mem.retreating || frac < 0.92) return out; // se queda curándose
+  }
+  if (frac < 0.35) mem.retreating = true;
+  if (mem.retreating) {
+    goHome();
+    return out;
+  }
+  // ¿ya puede pagar la siguiente mejora? merece el paseo
+  const nextWeapon = huntItemCost('weapon', p.weapon);
+  if (!atCamp && nextWeapon > 0 && p.gold >= nextWeapon) {
+    goHome();
+    return out;
+  }
+
+  const g = blockedGrid(state, map);
+  const hx = cellOf(u.x);
+  const hy = cellOf(u.y);
+  // 3 · colono a la vista y alcanzable
+  const prey = state.units
+    .filter((c) => c.alive && c.role === 'colonist' && sees(v, c.x, c.y))
+    .sort((a, b) => Math.hypot(a.x - u.x, a.y - u.y) - Math.hypot(b.x - u.x, b.y - u.y));
+  for (const c of prey) {
+    if (findPath(g, map.w, map.h, hx, hy, cellOf(c.x), cellOf(c.y), false).reached) {
+      if (u.target !== c.id) out.push({ k: 'attack', target: c.id });
+      return out;
+    }
+  }
+  // 4 · edificios conocidos que pueda tocar: Murallas primero
+  const dist = (k: { cx: number; cy: number }) => Math.hypot(k.cx + 0.5 - u.x, k.cy + 0.5 - u.y);
+  const known = [...mem.known.entries()]
+    .filter(([id]) => state.buildings.some((b) => b.id === id))
+    .sort((a, b) => (a[1].type === 'wall' ? 0 : 1) - (b[1].type === 'wall' ? 0 : 1) || dist(a[1]) - dist(b[1]));
+  if (known.some(([id]) => id === u.target)) return out; // ya está en ello
+  for (const [id, k] of known) {
+    if (findPath(g, map.w, map.h, hx, hy, k.cx, k.cy, true).reached) {
+      out.push({ k: 'attack', target: id });
+      return out;
+    }
+  }
+  // 5 · a ciegas: rastreo si lo tiene, y si no, patrulla de base en base
+  if (state.tick >= p.revealReady) {
+    out.push({ k: 'reveal' });
+    return out;
+  }
+  const base = map.bases[mem.patrol % map.bases.length];
+  const front = { x: base.door.x + 0.5, y: base.door.y + (base.door.y > base.y ? 2.5 : -1.5) };
+  if (Math.hypot(front.x - u.x, front.y - u.y) < 2) mem.patrol += 1;
+  else if (u.path.length === 0) out.push({ k: 'move', x: front.x, y: front.y });
+  return out;
 }
