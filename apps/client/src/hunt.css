@@ -759,3 +759,15 @@
   #screen-hunt.touch .hk-mini { top: 44px; }
   #screen-hunt.touch .hk-market .hk-btn { height: 46px; }
 }
+/* mercado: comprar/vender 10 y 200 en una cuadrícula 2×2 */
+.hk-market { display: grid !important; grid-template-columns: 1fr 1fr; gap: 4px; }
+.hk-market .hk-btn.sm { height: 28px; min-width: 0; padding: 0 6px; flex-direction: row; gap: 3px; }
+#screen-hunt.touch .hk-market { grid-template-columns: repeat(4, auto); }
+#screen-hunt.touch .hk-market .hk-btn.sm { height: 46px; }
+/* maná */
+.bar.mana { height: 11px; }
+.bar.mana i { background: linear-gradient(90deg, #2563eb, #60a5fa); }
+.bar.mana span { line-height: 9px; font-size: 0.6rem; }
+.hk-btn .mn { position: absolute; left: 3px; bottom: 2px; font-size: 0.55rem; font-weight: 800; color: #93c5fd; text-shadow: 0 1px 2px #000; }
+.hk-btn.nomana { opacity: 0.55; }
+.hk-btn.nomana .mn { color: #f87171; }

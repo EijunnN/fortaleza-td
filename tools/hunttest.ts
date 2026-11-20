@@ -497,6 +497,31 @@ console.log('lo que faltaba (2): troll, objetos, torres, Paladín, Rastreador');
   assert(w1.hp < 1e12 && w2.hp < 1e12, 'la Hacha del fin daña también el edificio de al lado');
 }
 
+console.log('maná y murallas del original');
+{
+  const st = createHunt(12, roster, 'p1');
+  const hp = P(st, 'p1');
+  assert(hp.mana === 200, `el troll empieza con 200 de maná (${hp.mana})`);
+  run(st, 1, [{ playerId: 'p1', cmd: { k: 'ability', a: 'eye', x: 50, y: 50 } }]);
+  assert(Math.abs(hp.mana - (200 - 60)) < 1, `el Ojo cuesta 60 de maná (${hp.mana.toFixed(1)})`);
+  hp.mana = 5;
+  hp.cds = {};
+  run(st, 1, [{ playerId: 'p1', cmd: { k: 'ability', a: 'eye', x: 50, y: 50 } }]);
+  assert(!(hp.cds.eye && hp.cds.eye > st.tick), 'sin maná no se puede lanzar');
+  // aleatoria: se convierte al instante en una rama de verdad
+  const ana = P(st, 'p2');
+  ana.gold = 100000;
+  const w: any = { id: 50001, owner: 'p2', type: 'wall', level: 5, cx: 5, cy: 5, size: 1, hp: 250, maxHp: 250, wallBranch: null, towerBranch: 'main', luckArmor: 0, luckReady: 0, invulnUntil: 0, packedUntil: 0, investGold: 0, investWood: 0, eyeUntil: 0, stunUntil: 0, howlUntil: 0, retro: 0, cd: 0, forceUntil: 0 };
+  st.buildings.push(w);
+  run(st, 1, [{ playerId: 'p2', cmd: { k: 'upgrade', id: w.id, branch: 'random' } }]);
+  assert(w.level === 6 && w.wallBranch !== 'random' && w.luckReady > st.tick, `la aleatoria sale como muralla de ${w.wallBranch} y podrá sortear a los 3 min`);
+  run(st, 1, [{ playerId: 'p2', cmd: { k: 'upgrade', id: w.id, branch: 'gold' } }]);
+  const w2: any = { ...w, id: 50002, level: 5, wallBranch: null, luckReady: 0 };
+  st.buildings.push(w2);
+  run(st, 1, [{ playerId: 'p2', cmd: { k: 'upgrade', id: w2.id, branch: 'gold' } }]);
+  assert(w2.level === 5, 'la muralla de oro no se elige directamente');
+}
+
 console.log('WASD (steer)');
 {
   const st = createHunt(2, roster, 'p1');

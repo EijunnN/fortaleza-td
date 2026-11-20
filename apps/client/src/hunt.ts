@@ -1106,7 +1106,7 @@ function onUiClick(e: Event): void {
       send({ k: 'train', id: selected, unit: v as 'repairer' | 'lumberjack', tier: n });
       break;
     case 'market':
-      send({ k: 'market', buy: v === 'buy' });
+      send({ k: 'market', buy: v === 'buy' || v === 'buybulk', bulk: v === 'buybulk' || v === 'sellbulk' });
       break;
     case 'spec':
       send({ k: 'spec', s: v as (typeof SPEC_ORDER)[number] });
@@ -1464,12 +1464,20 @@ function syncHud(): void {
   syncChoose();
 }
 
+function manaBar(m: HuntSnapMe): string {
+  const [cur0, max] = m.mana ?? [0, 0];
+  if (!max) return '';
+  return `<div class="bar mana"><i style="width:${Math.min(1, cur0 / max) * 100}%"></i><span>${fmt(cur0)} / ${fmt(max)} maná</span></div>`;
+}
+
 function abilityButton(a: Ability): string {
   const def = ABILITIES[a];
   const cd = me()?.cds[a] ?? 0;
-  const tip = `<b>${def.name}</b> <kbd>${def.key}</kbd><br>${esc(def.desc)}<br><small>Recarga ${def.cd} s</small>`;
-  return `<button class="hk-btn ab${targeting === a ? ' on' : ''}" data-act="ability" data-v="${a}" data-tip="${esc(tip)}">
-    <span class="ic">${icon(def.icon, def.emoji)}</span><kbd>${def.key}</kbd>${cd > 0 ? `<span class="cd">${cd}</span>` : ''}</button>`;
+  const mana = def.mana ?? 0;
+  const noMana = mana > (me()?.mana?.[0] ?? 0);
+  const tip = `<b>${def.name}</b> <kbd>${def.key}</kbd><br>${esc(def.desc)}<br><small>Recarga ${def.cd} s${mana ? ` · ${mana} de maná` : ''}</small>`;
+  return `<button class="hk-btn ab${targeting === a ? ' on' : ''}${noMana && cd <= 0 ? ' nomana' : ''}" data-act="ability" data-v="${a}" data-tip="${esc(tip)}">
+    <span class="ic">${icon(def.icon, def.emoji)}</span><kbd>${def.key}</kbd>${cd > 0 ? `<span class="cd">${cd}</span>` : ''}${mana ? `<span class="mn">${mana}</span>` : ''}</button>`;
 }
 
 // huecos del inventario. `own`: los tuyos (se usan con clic y llevan su tecla);
@@ -1566,11 +1574,12 @@ function syncCard(): void {
       const xpFrac = m.xpNext > m.xpPrev ? (m.xp - m.xpPrev) / (m.xpNext - m.xpPrev) : 0;
       unitbar = `<div class="hk-bars">
         <div class="bar hp"><i style="width:${frac * 100}%"></i><span>${fmt(u[5])} / ${fmt(u[6])}</span></div>
+        ${manaBar(m)}
         <div class="bar xp"><i style="width:${Math.min(1, xpFrac) * 100}%"></i><span>nivel ${m.level} · ${fmt(m.xp - m.xpPrev)}/${fmt(m.xpNext - m.xpPrev)} xp</span></div>
       </div>
       <div class="hk-stats">⚔ ${fmt(m.stats.dmg)} · 🛡 ${fmt(m.stats.armor)} · ⏱ ${m.stats.attackSec}s · 👣 ${m.stats.speed} · ❤ +${fmt(m.stats.regen)}/s${m.attrs[0] || m.attrs[1] ? ` · 💪 ${fmt(m.attrs[0])} · 🏹 ${fmt(m.attrs[1])}` : ''}</div>`;
     } else {
-      unitbar = `<div class="hk-bars"><div class="bar hp small"><i style="width:${frac * 100}%"></i><span>${u[5]} / ${u[6]}</span></div></div>`;
+      unitbar = `<div class="hk-bars"><div class="bar hp small"><i style="width:${frac * 100}%"></i><span>${u[5]} / ${u[6]}</span></div>${manaBar(m)}</div>`;
     }
   }
   const abilities = abilitiesOfMe().map(abilityButton).join('');
@@ -1586,9 +1595,13 @@ function syncCard(): void {
       return `<button class="hk-btn bd${placing === t ? ' on' : ''}${off ? ' off' : !afford(l1.gold, l1.wood) ? ' poor' : ''}" data-act="place" data-v="${t}" data-tip="${esc(tip)}">
         <span class="ic">${icon(d.icon, d.emoji)}</span><kbd>${d.hotkey}</kbd><span class="ct">${l1.gold || l1.wood ? costHtml(l1.gold, l1.wood) : 'gratis'}</span>${d.limit < 10 ? `<span class="nb">${have}/${d.limit}</span>` : ''}</button>`;
     }).join('');
+    const noTown = m.tech < 2;
+    const townTip = noTown ? '<br><em>Necesitas un Ayuntamiento (mejora tu taller).</em>' : '';
     const market = `<div class="hk-market">
-      <button class="hk-btn sm${afford(s.market + MARKET.step, 0) ? '' : ' poor'}" data-act="market" data-v="buy" data-tip="Compra ${MARKET.lot} de madera. Cada compra la encarece para todos.">${icon('hk:wood')}+${MARKET.lot} <small>${icon('hk:gold')}${s.market + MARKET.step}</small></button>
-      <button class="hk-btn sm${m.wood >= MARKET.lot ? '' : ' poor'}" data-act="market" data-v="sell" data-tip="Vende ${MARKET.lot} de madera.">${icon('hk:wood')}−${MARKET.lot} <small>${icon('hk:gold')}${s.market}</small></button>
+      <button class="hk-btn sm${!noTown && afford(s.market + MARKET.step, 0) ? '' : ' poor'}" data-act="market" data-v="buy" data-tip="${esc(`Compra ${MARKET.lot} de madera. Cada compra la encarece para todos.${townTip}`)}">${icon('hk:wood')}+${MARKET.lot} <small>${icon('hk:gold')}${s.market + MARKET.step}</small></button>
+      <button class="hk-btn sm${!noTown && m.wood >= MARKET.lot ? '' : ' poor'}" data-act="market" data-v="sell" data-tip="${esc(`Vende ${MARKET.lot} de madera.${townTip}`)}">${icon('hk:wood')}−${MARKET.lot} <small>${icon('hk:gold')}${s.market}</small></button>
+      <button class="hk-btn sm${!noTown && afford(s.market + MARKET.step, 0) ? '' : ' poor'}" data-act="market" data-v="buybulk" data-tip="${esc(`Compra 200 de madera de golpe (20 lotes; el precio sube en cada uno).${townTip}`)}">${icon('hk:wood')}+200</button>
+      <button class="hk-btn sm${!noTown && m.wood >= MARKET.lot ? '' : ' poor'}" data-act="market" data-v="sellbulk" data-tip="${esc(`Vende hasta 200 de madera de golpe.${townTip}`)}">${icon('hk:wood')}−200</button>
     </div>`;
     const book = m.spec
       ? `<span class="hk-spec" data-tip="${esc(`<b>${SPECS[m.spec].name}</b><br>${SPECS[m.spec].desc}`)}">${icon(SPECS[m.spec].icon)}</span>`
@@ -1652,7 +1665,7 @@ function syncPanel(): void {
   let up = '';
   if (level < maxLv) {
     if (type === 'wall' && level === 5) {
-      up = `<div class="hk-label">Especialidad (nivel 6)</div><div class="hk-branches">${WALL_BRANCH_ORDER.map((br) => {
+      up = `<div class="hk-label">Especialidad (nivel 6)</div><div class="hk-branches">${WALL_BRANCH_ORDER.filter((br) => !WALL_BRANCHES[br].hidden).map((br) => {
         const nd = levelDef('wall', 6, br, 'main');
         const req = reqText(nd.req);
         return `<button class="hk-branch${!afford(nd.gold, nd.wood) || req ? ' poor' : ''}" data-act="upgrade" data-v="${br}" data-tip="${esc(`<b>${WALL_BRANCHES[br].name}</b> · ${fmt(nd.hp)} de vida, armadura ${nd.armor}<br>${WALL_BRANCHES[br].pitch}`)}">
@@ -1688,9 +1701,10 @@ function syncPanel(): void {
     }
   } else up = `<div class="hk-req ok">Nivel máximo</div>`;
 
-  if (type === 'wall' && def.luck) {
-    up += `<button class="hk-btn wide${b[12] > 0 ? ' poor' : ''}" data-act="lots" data-tip="${esc('<b>Sortear armadura</b><br>De 0 a 30 de armadura extra. Cada 3 minutos.')}">${icon('hk:wall-random')} Sortear armadura <span class="ct">${b[12] > 0 ? `${b[12]} s` : `ahora +${b[11]}`}</span></button>`;
-  }
+  // muralla salida de la aleatoria: un único sorteo de armadura a los 3 minutos
+  if (type === 'wall' && b[12] >= 0) {
+    up += `<button class="hk-btn wide${b[12] > 0 ? ' poor' : ''}" data-act="lots" data-tip="${esc('<b>Sortear armadura</b><br>Una sola vez: de −3 a +3 de armadura para siempre.')}">${icon('hk:wall-random')} Sortear armadura <span class="ct">${b[12] > 0 ? `${b[12]} s` : 'ya'}</span></button>`;
+  } else if (type === 'wall' && b[11]) lines.push(`<div class="hk-req ok">Armadura sorteada: ${b[11] > 0 ? '+' : ''}${b[11]}</div>`);
   if (type === 'wall' && def.eatsTree) {
     up += `<button class="hk-btn wide${b[9] & 64 ? ' poor' : ''}" data-act="eat" data-tip="${esc(`<b>Comerse un árbol</b><br>Uno a 4 casillas como mucho: +${fmt(def.eatsTree)} de vida en 30 s. El árbol vuelve a crecer al minuto.`)}">${icon('hk:wall-tree')} Comerse un árbol <span class="ct">+${fmt(def.eatsTree)}</span></button>`;
   }

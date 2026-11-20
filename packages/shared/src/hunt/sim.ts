@@ -27,7 +27,13 @@ import {
   MARKET,
   MAX_LUMBERJACKS,
   PHASE,
+  MANA,
+  MANA_PER_INT,
+  HUT_MANA_REGEN,
   PALADIN,
+  WALL_LUCK_SEC,
+  WALL_LUCK_VALUES,
+  WALL_RANDOM_POOL,
   TOWER_FORKS,
   TOWER_GREEN_FINAL,
   RESOURCE_MULT,
@@ -92,6 +98,7 @@ export interface HuntPlayer {
   gold: number;
   wood: number;
   cds: Partial<Record<Ability, number>>; // tick en que vuelve a estar lista
+  mana: number;
   level: number;
   xp: number;
   inv: (InvSlot | null)[];
@@ -193,7 +200,8 @@ export interface HuntBuilding {
   forceUntil: number; // Plena fuerza: torres y minas al doble
   packedUntil: number; // casa empaquetada
   luckArmor: number; // muralla aleatoria
-  luckReady: number;
+  luckReady: number; // aleatoria: tick desde el que se puede sortear (0 = no aplica, −1 = ya sorteada)
+  wealthAt?: number; // Fortuna: próxima Abundancia
   eatUntil: number; // muralla de árbol comiéndose un árbol
   eatRate: number;
 }
@@ -263,7 +271,7 @@ export type HuntCommand =
   | { k: 'upgrade'; id: number; branch?: string }
   | { k: 'demolish'; id: number }
   | { k: 'train'; id: number; unit: 'repairer' | 'lumberjack'; tier: number }
-  | { k: 'market'; buy: boolean }
+  | { k: 'market'; buy: boolean; bulk?: boolean }
   | { k: 'ability'; a: Ability; x?: number; y?: number; target?: number }
   | { k: 'buy'; line: ItemLine; tier: number }
   | { k: 'buycons'; c: Consumable }
@@ -424,6 +432,7 @@ export function createHunt(seed: number, roster: { id: string; name: string; col
       gold: hunter ? 75 : ELF.startGold,
       wood: hunter ? 0 : ELF.startWood,
       cds: {},
+      mana: hunter ? MANA.hunter.max : MANA.elf.max,
       level: 1,
       xp: 0,
       inv: new Array(INVENTORY_SLOTS).fill(null),
@@ -696,7 +705,11 @@ export function foodOf(st: HuntState, owner: string): { used: number; cap: numbe
   const house = houseOf(st, owner);
   const cap = Math.min(ELF.foodCeiling, ELF.baseFood + (house ? levelDef('house', house.level, null, 'main').food ?? 0 : 0));
   let used = 0;
-  for (const u of st.units) if (u.alive && u.owner === owner && u.kind === 'repairer') used += REPAIRERS[u.tier].food;
+  for (const u of st.units) {
+    if (!u.alive || u.owner !== owner) continue;
+    if (u.kind === 'repairer') used += REPAIRERS[u.tier].food;
+    else if (u.kind === 'lumberjack') used += LUMBERJACKS[u.tier].food;
+  }
   return { used, cap };
 }
 
@@ -1044,8 +1057,14 @@ function strike(st: HuntState, att: HuntUnit, p: HuntPlayer, target: { b?: HuntB
   }
   if (b.packedUntil > st.tick) return;
   const def = buildingDef(b);
+  // Glaciar: a veces el golpe no entra
+  if (def.evasion && rand(st) < def.evasion) {
+    ev.push({ e: 'miss', x: b.cx + b.size / 2, y: b.cy + b.size / 2 });
+    return;
+  }
   if (def.extraDamageTaken) raw += def.extraDamageTaken;
   if (def.flatReduce) raw = Math.max(1, raw - def.flatReduce);
+  if (def.dmgTakenMult) raw *= def.dmgTakenMult;
   const dmg = Math.min(b.hp, raw * armorMult(def.armor + b.luckArmor + paladinAura(st, b.cx + b.size / 2, b.cy + b.size / 2)));
   b.hp -= dmg;
   // «Hacha del fin»: golpea al 100 % a los edificios enemigos alrededor
@@ -1077,6 +1096,23 @@ function strike(st: HuntState, att: HuntUnit, p: HuntPlayer, target: { b?: HuntB
   if (def.thorns) {
     att.hp -= def.thorns * armorMult(s.armor);
     if (att.hp <= 0) killUnit(st, att, b.owner, ev);
+  }
+  // Aleación: devuelve parte del golpe
+  if (def.reflect && att.alive) {
+    att.hp -= dmg * def.reflect;
+    if (att.hp <= 0) killUnit(st, att, b.owner, ev);
+  }
+  // Cactus: al recibir daño, a veces estalla contra todo lo enemigo de alrededor
+  if (def.burst && rand(st) < def.burst.chance) {
+    const bx = b.cx + b.size / 2;
+    const by = b.cy + b.size / 2;
+    ev.push({ e: 'fx', a: 'fullforce', x: bx, y: by, r: def.burst.r, side: 'elf' });
+    for (const o of st.units) {
+      if (!o.alive || !FIGHTER_KINDS.includes(o.kind) || Math.hypot(o.x - bx, o.y - by) > def.burst.r) continue;
+      const op = playerOf(st, o.owner);
+      o.hp -= def.burst.dmg * (op ? armorMult(fighterStats(st, op, o).armor) : 1);
+      if (o.hp <= 0) killUnit(st, o, b.owner, ev);
+    }
   }
   ev.push({ e: 'hit', x: b.cx + b.size / 2, y: b.cy + b.size / 2, dmg: Math.round(dmg), gold, by: p.id });
   if (b.hp <= 0.001) {
@@ -1140,17 +1176,29 @@ function applyCommand(st: HuntState, map: HuntMap, playerId: string, cmd: HuntCo
   }
   if (cmd.k === 'market') {
     if (p.side !== 'elf') return;
-    if (cmd.buy) {
-      const cost = st.market + MARKET.step;
-      if (p.gold < cost) return reject(ev, playerId, 'No te alcanza el oro');
-      p.gold -= cost;
-      p.wood += MARKET.lot;
-      st.market = Math.min(MARKET.max, st.market + MARKET.step);
-    } else {
-      if (p.wood < MARKET.lot) return reject(ev, playerId, `Necesitas ${MARKET.lot} de madera`);
-      p.wood -= MARKET.lot;
-      pay(p, st.market);
-      st.market = Math.max(MARKET.min, st.market - MARKET.step);
+    // en el original se comercia desde el Ayuntamiento (Town 1-3)
+    if (techOf(st, playerId) < 2) return reject(ev, playerId, 'Necesitas un Ayuntamiento para comerciar');
+    // lote de 200 = 20 lotes seguidos (el precio se mueve en cada uno)
+    const lots = cmd.bulk ? 20 : 1;
+    for (let i = 0; i < lots; i++) {
+      if (cmd.buy) {
+        const cost = st.market + MARKET.step;
+        if (p.gold < cost) {
+          if (i === 0) return reject(ev, playerId, 'No te alcanza el oro');
+          break;
+        }
+        p.gold -= cost;
+        p.wood += MARKET.lot;
+        st.market = Math.min(MARKET.max, st.market + MARKET.step);
+      } else {
+        if (p.wood < MARKET.lot) {
+          if (i === 0) return reject(ev, playerId, `Necesitas ${MARKET.lot} de madera`);
+          break;
+        }
+        p.wood -= MARKET.lot;
+        pay(p, st.market);
+        st.market = Math.max(MARKET.min, st.market - MARKET.step);
+      }
     }
     return;
   }
@@ -1273,11 +1321,12 @@ function applyCommand(st: HuntState, map: HuntMap, playerId: string, cmd: HuntCo
     if (!b) return;
     const def = buildingDef(b);
     if (cmd.k === 'lots') {
-      if (!def.luck) return;
-      if (b.luckReady > st.tick) return reject(ev, playerId, 'El sorteo aún se está recargando');
-      b.luckArmor = Math.floor(rand(st) * 31);
-      b.luckReady = st.tick + T(180);
-      ev.push({ e: 'bought', priv: playerId, text: `🎲 Armadura extra: +${b.luckArmor}` });
+      // sorteo ÚNICO de la aleatoria, a los 3 minutos: de −3 a +3 de armadura para siempre
+      if (b.luckReady <= 0) return reject(ev, playerId, b.luckReady < 0 ? 'Ya sorteaste esta muralla' : 'Solo la muralla aleatoria sortea');
+      if (b.luckReady > st.tick) return reject(ev, playerId, 'Aún no se puede sortear');
+      b.luckArmor = WALL_LUCK_VALUES[Math.floor(rand(st) * WALL_LUCK_VALUES.length)];
+      b.luckReady = -1;
+      ev.push({ e: 'bought', priv: playerId, text: `🎲 Armadura ${b.luckArmor >= 0 ? '+' : ''}${b.luckArmor}` });
       return;
     }
     if (!def.eatsTree) return;
@@ -1590,9 +1639,16 @@ function upgradeBuilding(st: HuntState, p: HuntPlayer, b: HuntBuilding, branch: 
   if (b.level >= levelsOf(b.type) || (b.type === 'wall' && b.level >= wallMaxLevel(b.wallBranch))) return reject(ev, p.id, 'Ya está al máximo');
   let wallBranch = b.wallBranch;
   let towerBranch = b.towerBranch;
+  let lucky = false;
   if (b.type === 'wall' && b.level === 5) {
     if (!branch || !(branch in WALL_BRANCHES)) return reject(ev, p.id, 'Elige una especialidad para la muralla');
+    if (WALL_BRANCHES[branch as WallBranch].hidden) return reject(ev, p.id, 'Esa muralla solo sale de la aleatoria');
     wallBranch = branch as WallBranch;
+    // aleatoria: se convierte YA en el nivel 6 de una rama al azar (puede salir oro)
+    if (wallBranch === 'random') {
+      wallBranch = WALL_RANDOM_POOL[Math.floor(rand(st) * WALL_RANDOM_POOL.length)];
+      lucky = true;
+    }
   }
   if (b.type === 'tower' && b.level === 2 && branch === 'gold') towerBranch = 'gold';
   let step = 1;
@@ -1616,6 +1672,10 @@ function upgradeBuilding(st: HuntState, p: HuntPlayer, b: HuntBuilding, branch: 
   b.level += step;
   b.wallBranch = wallBranch;
   b.towerBranch = towerBranch;
+  if (lucky) {
+    b.luckReady = st.tick + T(WALL_LUCK_SEC);
+    ev.push({ e: 'bought', priv: p.id, text: `🎲 La aleatoria salió: ${WALL_BRANCHES[wallBranch!].name}` });
+  }
   b.maxHp = next.hp;
   b.hp = Math.max(1, next.hp * frac);
   b.investGold += next.gold;
@@ -1634,9 +1694,12 @@ function trainWorker(st: HuntState, map: HuntMap, p: HuntPlayer, b: HuntBuilding
   if (rq) return reject(ev, p.id, rq);
   if (p.gold < def.gold) return reject(ev, p.id, 'No te alcanza el oro');
   if (p.wood < (def.wood ?? 0)) return reject(ev, p.id, 'No te alcanza la madera');
-  if (kind === 'repairer') {
+  if (def.food > 0) {
     const f = foodOf(st, p.id);
     if (f.used + def.food > f.cap) return reject(ev, p.id, 'Te falta comida: mejora tu casa');
+  }
+  if (kind === 'repairer') {
+    /* sin más límites */
   } else if (st.units.filter((u) => u.alive && u.owner === p.id && u.kind === 'lumberjack').length >= MAX_LUMBERJACKS) {
     return reject(ev, p.id, `Máximo ${MAX_LUMBERJACKS} leñadores`);
   }
@@ -1669,6 +1732,7 @@ function becomeRole(st: HuntState, p: HuntPlayer, f: 'angel' | 'wolf', ev: HuntE
   p.form = f;
   p.side = f === 'wolf' ? 'hunter' : 'elf';
   p.cds = {};
+  p.mana = MANA[f].max;
   if (f === 'angel') {
     const u = newUnit(st, p.id, 'angel', map.angelSpawn.x + 0.5, map.angelSpawn.y + 0.5, ANGEL.hp);
     u.invulnUntil = st.tick + T(ANGEL.invulnOnSpawnSec);
@@ -1697,6 +1761,7 @@ function castAbility(
   const allowed = FORM_ABILITIES[form]?.includes(a) || (form === 'elf' && !!p.spec && SPEC_ABILITY[p.spec] === a);
   if (!def || !allowed) return;
   if ((p.cds[a] ?? 0) > st.tick) return reject(ev, p.id, `${def.name} aún se está recargando`);
+  if ((def.mana ?? 0) > (p.mana ?? 0)) return reject(ev, p.id, `No tienes maná suficiente (${def.mana})`);
   if (u.silenceUntil > st.tick) return reject(ev, p.id, 'Estás silenciado');
   if (!canAct(st, u)) return;
   if (u.kind === 'hunter' && st.tick < st.releaseTick && a !== 'eye') return reject(ev, p.id, 'Aún estás retenido en la guarida');
@@ -1784,8 +1849,8 @@ function castAbility(
       ev.push({ e: 'fx', a, x: u.x, y: u.y, r: 3, side: p.side });
       break;
     case 'occult': {
-      const ally = st.units.find((o) => o.alive && o.kind === 'elf' && Math.hypot(o.x - tx, o.y - ty) <= (def.radius ?? 1.2));
-      if (!ally) return reject(ev, p.id, 'Apunta a un colono');
+      const ally = st.units.find((o) => o.alive && sideOfOwner(st, o.owner) === 'elf' && Math.hypot(o.x - tx, o.y - ty) <= (def.radius ?? 1.2));
+      if (!ally) return reject(ev, p.id, 'Apunta a un aliado');
       ally.occultUntil = st.tick + dur;
       ev.push({ e: 'fx', a, x: ally.x, y: ally.y, side: p.side });
       break;
@@ -1813,17 +1878,27 @@ function castAbility(
       }
       ev.push({ e: 'fx', a, x: tx, y: ty, r: def.radius, side: p.side });
       break;
-    case 'stun':
-      for (const o of enemiesOfElves(tx, ty, def.radius ?? 1.5)) o.stunUntil = st.tick + dur;
+    case 'stun': {
+      const hit = enemiesOfElves(tx, ty, def.radius ?? 1.5);
+      if (!hit.length) return reject(ev, p.id, 'No hay ningún enemigo ahí');
+      for (const o of hit) o.stunUntil = st.tick + dur;
       ev.push({ e: 'fx', a, x: tx, y: ty, r: def.radius, side: p.side });
       break;
+    }
     case 'moonguard':
     case 'holylight': {
       // el Guardián es para lo propio; la Luz sagrada vale para cualquier aliado
       const b = st.buildings.find((o) => o.id === cmd.target && (o.owner === p.id || (a === 'holylight' && sideOfOwner(st, o.owner) === 'elf')));
       if (!b) return reject(ev, p.id, a === 'holylight' ? 'Elige un edificio aliado' : 'Elige un edificio tuyo');
       if (distToRect(u.x, u.y, b.cx, b.cy, b.size, b.size) > (def.range ?? 3) + 0.5) return reject(ev, p.id, 'Demasiado lejos');
-      if (a === 'moonguard') b.invulnUntil = st.tick + Math.round(dur * (b.wallBranch === 'elf' ? 1.2 : 1));
+      if (a === 'moonguard') {
+        // original (ZLx): 10 s sobre tu muralla de nivel máximo, 6 s sobre lo demás,
+        // ×1,2 en la élfica; entre 5 y 15 s
+        const top = Math.max(0, ...st.buildings.filter((o) => o.owner === p.id && o.type === 'wall').map((o) => o.level));
+        let secs = b.type === 'wall' && b.level >= top ? 10 : 6;
+        if (b.wallBranch === 'elf') secs *= 1.2;
+        b.invulnUntil = st.tick + T(Math.max(5, Math.min(15, secs)));
+      }
       else b.hp = Math.min(b.maxHp, b.hp + 10 + (b.maxHp - b.hp) * 0.35);
       ev.push({ e: 'fx', a, x: b.cx + b.size / 2, y: b.cy + b.size / 2, side: p.side });
       break;
@@ -1875,6 +1950,7 @@ function castAbility(
       break;
   }
   p.cds[a] = st.tick + T(def.cd);
+  p.mana = (p.mana ?? 0) - (def.mana ?? 0);
 }
 
 // ---------- un tick ----------
@@ -2306,6 +2382,20 @@ function stepWorker(st: HuntState, map: HuntMap, g: Uint8Array, u: HuntUnit): vo
   }
 }
 
+// maná máximo y recuperación del jugador (el troll y el lobo suman INT: +1 por nivel,
+// los talentos y los objetos de «+todo»)
+export function manaOf(st: HuntState, p: HuntPlayer): { max: number; regen: number } {
+  const base = MANA[p.form as keyof typeof MANA];
+  if (!base) return { max: 0, regen: 0 };
+  let int = 0;
+  if (p.form === 'hunter' || p.form === 'wolf') {
+    int = p.level - 1 + (p.form === 'hunter' ? HUNTER.talentAttr + (p.boots < 0 ? HUNTER.emptyBootsAttr : 0) : 0);
+    // solo los objetos de «+N a todos los atributos» dan inteligencia
+    for (const it of p.inv) if (it?.kind === 'trinket' && (TRINKETS[it.t].str ?? 0) === (TRINKETS[it.t].agi ?? -1)) int += TRINKETS[it.t].str ?? 0;
+  }
+  return { max: base.max + int * MANA_PER_INT.max, regen: base.regen + int * MANA_PER_INT.regen };
+}
+
 export function stepHunt(st: HuntState, cmds: HuntPlayerCommand[]): HuntEvent[] {
   const ev: HuntEvent[] = [];
   if (st.over) {
@@ -2450,7 +2540,7 @@ export function stepHunt(st: HuntState, cmds: HuntPlayerCommand[]): HuntEvent[] 
   const runic = st.buildings.filter((b) => b.type === 'tower' && buildingDef(b).auraHaste);
   const angels = st.units.filter((u) => u.alive && u.kind === 'angel');
   for (const b of st.buildings) {
-    if (b.type !== 'tower') continue;
+    if (b.type !== 'tower' && !(b.type === 'wall' && b.wallBranch === 'tree')) continue;
     if (b.cd > 0) {
       b.cd -= 1;
       continue;
@@ -2477,7 +2567,7 @@ export function stepHunt(st: HuntState, cmds: HuntPlayerCommand[]): HuntEvent[] 
     }
     if (!target) continue;
     const fp = playerOf(st, target.owner)!;
-    let dmg = def.dmg * (b.howlUntil > st.tick ? 0.5 : 1);
+    let dmg = def.dmg * (b.howlUntil > st.tick ? 0.75 : 1);
     // aura del ángel: +10 % al daño de las torres cercanas
     if (angels.some((a) => Math.hypot(a.x - b.cx - 0.5, a.y - b.cy - 0.5) <= 7)) dmg *= 1.1;
     let fxName: string | undefined;
@@ -2550,7 +2640,32 @@ export function stepHunt(st: HuntState, cmds: HuntPlayerCommand[]): HuntEvent[] 
   }
 
   // una vez por segundo: ingresos, reapariciones y elecciones pendientes
+  // maná: se recupera poco a poco; la guarida recarga un 6 % por segundo
+  {
+    const map = getHuntMap();
+    for (const p of st.players) {
+      const mm = manaOf(st, p);
+      if (!mm.max) continue;
+      let regen = mm.regen;
+      if (p.side === 'hunter') {
+        const u = mainUnit(st, p.id);
+        if (u && Math.hypot(u.x - (map.camp.x + 0.5), u.y - (map.camp.y + 0.5)) <= HUT_RADIUS + 1) regen += mm.max * HUT_MANA_REGEN;
+      }
+      p.mana = Math.min(mm.max, (p.mana ?? mm.max) + regen / TICK_RATE);
+    }
+  }
   if (st.tick % TICK_RATE === 0 && st.tick > 0) {
+    // Fortuna (A0M1): cada cierto tiempo, oro para todos los aliados del dueño
+    for (const b of st.buildings) {
+      const w = b.type === 'wall' ? buildingDef(b).wealth : undefined;
+      if (!w) continue;
+      if (!b.wealthAt) b.wealthAt = st.tick + T(w);
+      if (st.tick < b.wealthAt) continue;
+      b.wealthAt = st.tick + T(w);
+      const gold = Math.min(goldUnit(huntMinute(st)) * 20, 1_000_000);
+      for (const q of st.players) if (q.side === 'elf' && q.form !== 'dead') earn(q, gold);
+      ev.push({ e: 'fx', a: 'fullforce', x: b.cx + 0.5, y: b.cy + 0.5, r: 2, side: 'elf' });
+    }
     for (const p of st.players) {
       if (p.form === 'elf' && p.alive) {
         for (const b of st.buildings) {
@@ -2650,6 +2765,7 @@ export interface HuntSnapMe {
   dest: [number, number] | null;
   speed: number; // casillas/s reales de tu unidad (para predecir el WASD)
   allowWolves: boolean; // cazador: ¿admite lobos?
+  mana: [number, number]; // actual y máximo
   steer: [number, number]; // dirección de WASD que el servidor ya aplicó
   channel: number;
   hutLevel: number;
@@ -2748,6 +2864,7 @@ export function buildHuntSnap(st: HuntState, viewerId: string | null): HuntSnap 
       dest: u && u.path.length > 0 ? u.path[u.path.length - 1] : null,
       speed: u ? Math.round(unitSpeed(st, u) * 1000) / 1000 : 0,
       allowWolves: viewer.allowWolves !== false,
+      mana: [Math.floor(viewer.mana ?? 0), manaOf(st, viewer).max],
       steer: u ? [u.sx, u.sy] : [0, 0],
       channel: u && u.channelEnd > 0 ? secsLeft(u.channelEnd - st.tick) : 0,
       hutLevel: st.hutLevel,
@@ -2812,7 +2929,7 @@ export function buildHuntSnap(st: HuntState, viewerId: string | null): HuntSnap 
       (b.packedUntil > st.tick ? 16 : 0) |
       (b.forceUntil > st.tick ? 32 : 0) |
       (b.eatUntil > st.tick ? 64 : 0);
-    buildings.push([b.id, ['house', 'wall', 'tower', 'workshop', 'elftree', 'mine', 'sight'].indexOf(b.type), idx.get(b.owner) ?? 0, b.cx, b.cy, b.level, Math.ceil(b.hp), Math.round(b.maxHp), branch, flags, b.retro, b.luckArmor, secsLeft(b.luckReady - st.tick), sameSide(b.owner) ? (b.focus ?? 0) : 0]);
+    buildings.push([b.id, ['house', 'wall', 'tower', 'workshop', 'elftree', 'mine', 'sight'].indexOf(b.type), idx.get(b.owner) ?? 0, b.cx, b.cy, b.level, Math.ceil(b.hp), Math.round(b.maxHp), branch, flags, b.retro, b.luckArmor, b.luckReady > 0 ? secsLeft(b.luckReady - st.tick) : -1, sameSide(b.owner) ? (b.focus ?? 0) : 0]);
   }
   return {
     tick: st.tick,
