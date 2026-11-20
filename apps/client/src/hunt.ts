@@ -57,6 +57,9 @@ import {
   type UnitKind,
   type WallBranch,
   RESOURCE_MULT,
+  SOLDIERS,
+  SOLDIER_ORDER,
+  type SoldierKind,
   TOWER_FORKS,
   TOWER_GREEN_FINAL,
   WOOD_BULK,
@@ -188,7 +191,9 @@ const UNIT_ICON: Record<UnitKind, string> = {
   lumberjack: 'hk:lumberjack',
   beast: 'hk:beast',
   mage: 'hk:mage',
+  ...(Object.fromEntries(SOLDIER_ORDER.map((k) => [k, SOLDIERS[k].icon])) as Record<SoldierKind, string>),
 };
+const isSoldierKind = (k: UnitKind): k is SoldierKind => k in SOLDIERS;
 
 function reqText(req: Req | undefined): string | null {
   const m = me();
@@ -804,7 +809,7 @@ function onWorldClick(x: number, y: number, right: boolean): void {
 }
 
 // unidades propias que se mandan con el ratón (tu personaje va con WASD)
-const COMMANDABLE: UnitKind[] = ['repairer', 'lumberjack', 'beast', 'mage'];
+const COMMANDABLE: UnitKind[] = ['repairer', 'lumberjack', 'beast', 'mage', ...SOLDIER_ORDER];
 
 function commandUnit(u: HuntSnapUnit, x: number, y: number): void {
   if (!cur) return;
@@ -812,7 +817,7 @@ function commandUnit(u: HuntSnapUnit, x: number, y: number): void {
   const cx = Math.floor(x);
   const cy = Math.floor(y);
   const bAt = cur.snap.buildings.find((o) => cx >= o[3] && cx < o[3] + bSize(o) && cy >= o[4] && cy < o[4] + bSize(o));
-  if (kind === 'beast' || kind === 'mage') {
+  if (kind === 'beast' || kind === 'mage' || isSoldierKind(kind)) {
     const mineU = myUnit();
     if (mineU && Math.hypot(mineU[3] - x, mineU[4] - y) < 0.9) {
       send({ k: 'worker', id: u[0], follow: true });
@@ -1075,6 +1080,9 @@ function onUiClick(e: Event): void {
       break;
     case 'demolish':
       send({ k: 'demolish', id: selected });
+      break;
+    case 'army':
+      send({ k: 'army', id: selected, kind: v as SoldierKind });
       break;
     case 'sellunit':
       if (inspect) send({ k: 'sellunit', id: inspect });
@@ -1517,6 +1525,7 @@ const KIND_NAME: Record<UnitKind, string> = {
   lumberjack: 'Leñador',
   beast: 'Bestia del cazador',
   mage: 'Mago élfico',
+  ...(Object.fromEntries(SOLDIER_ORDER.map((k) => [k, SOLDIERS[k].name])) as Record<SoldierKind, string>),
 };
 
 // ficha de la unidad que inspeccionas: vida, nivel y, si es el cazador o un
@@ -1548,7 +1557,8 @@ function inspectHtml(u: HuntSnapUnit): string {
       beast: 'Clic derecho: en un enemigo, lo ataca; en el suelo, va y se queda; en tu personaje, te sigue.',
       mage: 'Clic derecho: en el cazador, lo ataca; en el suelo, va y se queda; en tu personaje, te sigue.',
     };
-    lines.push(`<div class="hk-hint">${how[kind]}</div>`);
+    if (isSoldierKind(kind)) lines.push(`<div class="hk-hint">${esc(SOLDIERS[kind].desc)}</div>`);
+    lines.push(`<div class="hk-hint">${how[kind] ?? 'Clic derecho: en un enemigo, lo ataca; en el suelo, va y se queda; en tu personaje, te sigue.'}</div>`);
     if (kind === 'repairer' || kind === 'lumberjack') {
       const def = (kind === 'repairer' ? REPAIRERS : LUMBERJACKS)[u[8]];
       lines.push(`<button class="hk-btn sm danger" data-act="sellunit" data-tip="Recuperas la mitad de lo que costó">${icon('hk:demolish')} Vender (+${fmt(Math.floor((def?.gold ?? 0) / 2))})</button>`);
@@ -1710,6 +1720,14 @@ function syncPanel(): void {
   }
   if (type === 'tower' && b[10] > 0) lines.push(`<div class="hk-req ok">Remodelada ${b[10]}/5: +${b[10] * 20} % de alcance, +${b[10] * 5} % de cadencia</div>`);
   let train = '';
+  let army = '';
+  if (type === 'workshop' && level >= 5) {
+    army = `<div class="hk-label">Ejército (Cenarion Keep)</div><div class="hk-train">${SOLDIER_ORDER.map((k) => {
+      const d = SOLDIERS[k];
+      const stats = d.dmg ? `vida ${fmt(d.hp)} · daño ${fmt(d.dmg)} · alcance ${d.range.toFixed(1)} · armadura ${d.armor}` : `vida ${fmt(d.hp)} · no ataca`;
+      return `<button class="hk-btn tr${!afford(d.gold, d.wood) ? ' poor' : ''}" data-act="army" data-v="${k}" data-tip="${esc(`<b>${d.name}</b> · ${costHtml(d.gold, d.wood)} · comida ${d.food}<br>${stats}<br>${d.desc}`)}"><span class="ic">${icon(d.icon)}</span><span class="ct">${d.gold ? fmt(d.gold) : `${fmt(d.wood)}🪵`}</span></button>`;
+    }).join('')}</div>`;
+  }
   if (type === 'workshop' || type === 'elftree') {
     const table = type === 'workshop' ? REPAIRERS : LUMBERJACKS;
     const kind = type === 'workshop' ? 'repairer' : 'lumberjack';
@@ -1731,7 +1749,7 @@ function syncPanel(): void {
       : `<div class="hk-hint">Clic derecho sobre un enemigo: esta torre le dispara primero.</div>`;
   }
   const html = `<div class="hk-panel-head"><span class="ic big">${icon(buildingIcon(b))}</span><div><b>${esc(def.name)}</b><small>nivel ${level}/${maxLv}</small></div><button data-act="close" data-v="panel">✕</button></div>
-    ${lines.join('')}${up}${train}
+    ${lines.join('')}${up}${train}${army}
     ${towerFocus}<button class="hk-btn sm danger" data-act="demolish" data-tip="Vender (Supr): recuperas la mitad de lo invertido. Solo con la vida casi entera y sin el cazador cerca.">${icon('hk:demolish')} Vender (½)</button>`;
   setHtml('hk-panel', html);
   panel.hidden = false;
@@ -2157,7 +2175,8 @@ function drawUnit(u: HuntSnapUnit, x: number, y: number, now: number, moving: bo
     x += vx * s * (kind === 'lumberjack' ? 0.5 : 0.36);
     y += vy * s * (kind === 'lumberjack' ? (vy < 0 ? 0.62 : 0.4) : 0.36);
   }
-  const size = sheet ? (SPRITE_TILES[kind] ?? 1.3) * s * 0.8 : kind === 'hunter' ? s * 2 : kind === 'wolf' ? s * 1.45 : worker ? s * 0.85 : s * 1.2;
+  const soldier = isSoldierKind(kind);
+  const size = sheet ? (SPRITE_TILES[kind] ?? 1.3) * s * 0.8 : soldier ? SOLDIERS[kind].size * s : kind === 'hunter' ? s * 2 : kind === 'wolf' ? s * 1.45 : worker ? s * 0.85 : s * 1.2;
   const footY = sheet ? y + s * 0.32 : y + size * 0.36;
   const topY = sheet ? footY - (SPRITE_TILES[kind] ?? 1.3) * s * 0.92 : y - size * 0.55;
   const invis = (u[7] & 1) !== 0;
@@ -2273,7 +2292,7 @@ function drawUnit(u: HuntSnapUnit, x: number, y: number, now: number, moving: bo
     g.textAlign = 'center';
     g.fillText(st.join(''), x, topY - s * 0.45);
   }
-  if (!worker) {
+  if (!worker && !soldier) {
     const name = init?.players[u[2]]?.name ?? '';
     g.font = `700 ${Math.round(Math.max(10, s * 0.26))}px system-ui, sans-serif`;
     g.textAlign = 'center';

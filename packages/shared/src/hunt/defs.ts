@@ -1045,6 +1045,51 @@ export const BEAST = {
   windwalk: { cd: 30, dur: 20 },
 } as const;
 
+// ---------- Ejército élfico (Cenarion Keep u01B; aquí lo entrena la Fortaleza) ----------
+export type SoldierKind = 'owl' | 'bladecar' | 'elfhunter' | 'breaker' | 'warder' | 'ctree' | 'giant' | 'raptor' | 'claw';
+export const SOLDIER_ORDER: SoldierKind[] = ['owl', 'bladecar', 'elfhunter', 'breaker', 'warder', 'ctree', 'giant', 'raptor', 'claw'];
+export interface SoldierDef {
+  name: string;
+  icon: string;
+  gold: number;
+  wood: number;
+  food: number;
+  hp: number;
+  armor: number;
+  dmg: number; // 0 = no ataca (búho)
+  cd: number;
+  range: number; // casillas
+  speed: number; // casillas/s
+  regen: number; // vida/s (de noche, los que regeneran de noche)
+  nightRegen?: boolean;
+  fly?: boolean; // vuela por encima de muros y árboles
+  size: number; // tamaño de dibujo (casillas)
+  desc: string;
+}
+// datos de UnitBalance/UnitWeapons/AbilityData del original (velocidad normal)
+export const SOLDIERS: Record<SoldierKind, SoldierDef> = {
+  owl: { name: 'Búho', icon: 'enemy:harpy', gold: 0, wood: 512, food: 2, hp: 10, armor: 0, dmg: 0, cd: 1, range: 0, speed: toTiles(310), regen: 0.5, fly: true, size: 0.9, desc: 'Explorador volador e invisible. Ve al cazador invisible a su alrededor (visión verdadera 900).' },
+  bladecar: { name: 'Carro de cuchillas', icon: 'fusion:shredder', gold: 2560, wood: 80, food: 4, hp: 300, armor: 2, dmg: 512, cd: 1, range: toTiles(1150), speed: toTiles(280), regen: 0, size: 1.1, desc: 'Asedio de muy largo alcance (1150). 20 % de golpes críticos ×1,5.' },
+  elfhunter: { name: 'Cazadora elfa', icon: 'tower:archer', gold: 5120, wood: 160, food: 4, hp: 575, armor: 2, dmg: 1024, cd: 1, range: toTiles(700), speed: toTiles(350), regen: 0.5, nightRegen: true, size: 1.05, desc: 'Su hoja lunar rebota a otro enemigo cercano.' },
+  breaker: { name: 'Rompemagia', icon: 'enemy:knight', gold: 7680, wood: 240, food: 4, hp: 650, armor: 3, dmg: 1024, cd: 0.75, range: toTiles(600), speed: toTiles(300), regen: 0.5, size: 1.05, desc: 'Inmune a la magia. Cada golpe quema 4 de maná y hace 4 de daño por cada uno.' },
+  warder: { name: 'Guardiana', icon: 'enemy:stalker', gold: 15360, wood: 480, food: 4, hp: 550, armor: 2, dmg: 1600, cd: 1, range: toTiles(600), speed: toTiles(300), regen: 0.5, size: 1.05, desc: 'Sus dagas envenenan: 512 de daño por segundo 3 s y −25 % de velocidad.' },
+  ctree: { name: 'Árbol cenarion', icon: 'hk:wall-tree', gold: 0, wood: 7680, food: 8, hp: 102400, armor: 14, dmg: 20480, cd: 1, range: toTiles(600), speed: toTiles(220), regen: 100, nightRegen: true, size: 1.7, desc: 'Enreda al enemigo con raíces 2 s cada 8 s.' },
+  giant: { name: 'Gigante de montaña', icon: 'enemy:golem', gold: 0, wood: 15360, food: 4, hp: 256000, armor: 85, dmg: 51200, cd: 1, range: 1.3, speed: toTiles(270), regen: 128, nightRegen: true, size: 1.9, desc: 'Piel dura: cada golpe que recibe hace 2000 menos (como mínimo 1000).' },
+  raptor: { name: 'Druida raptor', icon: 'enemy:chimera', gold: 0, wood: 51200, food: 4, hp: 256000, armor: 64, dmg: 128000, cd: 1, range: toTiles(800), speed: toTiles(350), regen: 256, nightRegen: true, size: 1.6, desc: 'Fuego feérico (−1024 de armadura 20 s) y ciclón (2 s fuera de combate cada 60 s).' },
+  claw: { name: 'Druida garra', icon: 'enemy:brute', gold: 0, wood: 99999, food: 4, hp: 256000, armor: 128, dmg: 256000, cd: 1, range: 1.3, speed: toTiles(270), regen: 256, nightRegen: true, size: 1.8, desc: 'Rugido: +25 % de daño 30 s a sí mismo y a los suyos cercanos.' },
+};
+export const SOLDIER_SKILLS = {
+  ctreeRoot: { cd: 8, dur: 2, range: toTiles(800) },
+  raptorFire: { cd: 45, dur: 20, armor: 1024, range: toTiles(700) },
+  raptorCyclone: { cd: 60, dur: 2, range: toTiles(600) },
+  clawRoar: { cd: 67, dur: 30, bonus: 0.25, r: toTiles(500) },
+  warderPoison: { dps: 512, dur: 3 },
+  breakerBurn: 4,
+  giantSkin: { reduce: 2000, min: 1000 },
+  owlSight: toTiles(900),
+  carCrit: { chance: 0.2, mult: 1.5 },
+};
+
 // Paladín (último reparador): Luz sagrada, Armadura sagrada y aura de armadura
 export const PALADIN = {
   holyLight: { cd: 150, range: toTiles(800), base: 5, missing: 0.35 },

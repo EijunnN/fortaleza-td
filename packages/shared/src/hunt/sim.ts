@@ -27,6 +27,10 @@ import {
   MARKET,
   MAX_LUMBERJACKS,
   PHASE,
+  SOLDIERS,
+  SOLDIER_ORDER,
+  SOLDIER_SKILLS,
+  type SoldierKind,
   MANA,
   MANA_PER_INT,
   HUT_MANA_REGEN,
@@ -77,8 +81,10 @@ import { TILE_FLOOR, getHuntMap, type HuntMap } from './map.js';
 // ---------- estado ----------
 
 export type Side = 'hunter' | 'elf';
-export type UnitKind = 'hunter' | 'elf' | 'angel' | 'wolf' | 'repairer' | 'lumberjack' | 'beast' | 'mage';
-export const UNIT_KIND_ORDER: UnitKind[] = ['hunter', 'elf', 'angel', 'wolf', 'repairer', 'lumberjack', 'beast', 'mage'];
+export type UnitKind = 'hunter' | 'elf' | 'angel' | 'wolf' | 'repairer' | 'lumberjack' | 'beast' | 'mage' | SoldierKind;
+export const UNIT_KIND_ORDER: UnitKind[] = ['hunter', 'elf', 'angel', 'wolf', 'repairer', 'lumberjack', 'beast', 'mage', ...SOLDIER_ORDER];
+const isSoldier = (k: UnitKind): k is SoldierKind => k in SOLDIERS;
+const toTilesRuntime = (wc3: number) => wc3 / 128;
 const FIGHTER_KINDS: UnitKind[] = ['hunter', 'wolf', 'beast'];
 
 export type InvSlot =
@@ -137,6 +143,7 @@ export interface HuntUnit {
   sy: number;
   claimAt: number; // último tick en que el cliente corrigió su posición (WASD)
   chillUntil: number; // escarcha del troll: −25 % de velocidad
+  roarUntil: number; // rugido del druida garra: +25 % de daño
   recallTo: number; // «Regreso» hacia un aliado (id de unidad; 0 = a la guarida)
   ready: Record<string, number>; // recargas propias (Rastreador, Paladín): tick en que vuelve a estar lista
   anchorX: number; // obrero movido con el ratón: trabaja alrededor de aquí (−1 = donde sea)
@@ -262,6 +269,8 @@ export type HuntCommand =
   // obreros con el ratón: a un punto, a reparar un edificio o a talar un árbol
   | { k: 'worker'; id: number; x?: number; y?: number; target?: number; tree?: number; follow?: boolean }
   | { k: 'sellunit'; id: number }
+  // la Fortaleza (Cenarion Keep) entrena el ejército élfico
+  | { k: 'army'; id: number; kind: SoldierKind }
   // torre: disparar primero a esta unidad (0 = la más cercana, como siempre)
   | { k: 'focus'; id: number; target: number }
   | { k: 'attack'; target: number }
@@ -346,6 +355,7 @@ function newUnit(st: HuntState, owner: string, kind: UnitKind, x: number, y: num
     sy: 0,
     claimAt: 0,
     chillUntil: 0,
+    roarUntil: 0,
     recallTo: 0,
     ready: {},
     anchorX: -1,
@@ -660,6 +670,15 @@ function smoothPath(g: Uint8Array, w: number, h: number, sx: number, sy: number,
 function routeTo(st: HuntState, map: HuntMap, g: Uint8Array, u: HuntUnit, goal: NonNullable<HuntUnit['goal']>, dest: { x: number; y: number } | null = null): boolean {
   u.goal = goal;
   u.dest = dest;
+  // el búho vuela: en línea recta, por encima de muros y árboles
+  if (u.kind === 'owl') {
+    const gx = dest ? dest.x : goal.x + goal.w / 2;
+    const gy = dest ? dest.y : goal.y + goal.h / 2;
+    u.dest = { x: gx, y: gy };
+    u.path = [[cell(gx), cell(gy)]];
+    u.repathAt = st.tick + T(1);
+    return true;
+  }
   const res = huntFindPath(g, map.w, map.h, cell(u.x), cell(u.y), goal);
   u.path = smoothPath(g, map.w, map.h, u.x, u.y, res.path);
   // destino en la misma casilla: ir directo al punto pinchado
@@ -709,6 +728,7 @@ export function foodOf(st: HuntState, owner: string): { used: number; cap: numbe
     if (!u.alive || u.owner !== owner) continue;
     if (u.kind === 'repairer') used += REPAIRERS[u.tier].food;
     else if (u.kind === 'lumberjack') used += LUMBERJACKS[u.tier].food;
+    else if (isSoldier(u.kind)) used += SOLDIERS[u.kind].food;
   }
   return { used, cap };
 }
@@ -753,6 +773,11 @@ function trinkets(p: HuntPlayer) {
 export function fighterStats(st: HuntState, p: HuntPlayer, u: HuntUnit | undefined): FighterStats & { block: number } {
   if (u?.kind === 'beast') {
     return { maxHp: BEAST.hp, dmg: BEAST.dmg, armor: 4, regen: 0, attackSec: BEAST.attackSec, speed: BEAST.speed, block: 0 };
+  }
+  if (u && isSoldier(u.kind)) {
+    const d = SOLDIERS[u.kind];
+    const regen = d.nightRegen && !isNightAt(st) ? 0.5 : d.regen;
+    return { maxHp: d.hp, dmg: d.dmg, armor: d.armor, regen, attackSec: d.cd, speed: d.speed * (u.chillUntil > st.tick ? 0.75 : 1), block: 0 };
   }
   if (u?.kind === 'mage') {
     return { maxHp: MAGE.hp, dmg: MAGE.dmg, armor: MAGE.armor, regen: MAGE.regen, attackSec: MAGE.cd, speed: MAGE.speed, block: 0 };
@@ -803,6 +828,16 @@ function baseSpeed(st: HuntState, u: HuntUnit): number {
     case 'beast':
     case 'mage':
       return p ? fighterStats(st, p, u).speed : HUNTER.speed;
+    case 'owl':
+    case 'bladecar':
+    case 'elfhunter':
+    case 'breaker':
+    case 'warder':
+    case 'ctree':
+    case 'giant':
+    case 'raptor':
+    case 'claw':
+      return SOLDIERS[u.kind].speed;
     case 'elf': {
       if (st.tick < st.releaseTick) return PHASE.sprintSpeed;
       let v = ELF.speed;
@@ -838,6 +873,7 @@ export function visionSources(st: HuntState, side: Side, viewer: HuntPlayer | nu
     let r = 4;
     if (u.kind === 'hunter' || u.kind === 'wolf' || u.kind === 'beast') r = night ? HUNTER.visionNight : HUNTER.visionDay;
     else if (u.kind === 'mage') r = 10;
+    else if (isSoldier(u.kind)) r = u.kind === 'owl' ? toTilesRuntime(1500) : 9;
     else if (u.kind === 'elf') r = night ? ELF.visionNight : ELF.visionDay;
     else if (u.kind === 'angel') r = ANGEL.vision;
     src.push([u.x, u.y, r]);
@@ -866,6 +902,7 @@ function detected(st: HuntState, u: HuntUnit): boolean {
   if (u.invisUntil <= st.tick && u.occultUntil <= st.tick) return true;
   const side = sideOfOwner(st, u.owner);
   for (const e of st.eyes) if (e.detect && e.side !== side && e.until > st.tick && Math.hypot(e.x - u.x, e.y - u.y) <= e.r) return true;
+  if (side === 'hunter') for (const o of st.units) if (o.alive && o.kind === 'owl' && Math.hypot(o.x - u.x, o.y - u.y) <= SOLDIER_SKILLS.owlSight) return true;
   for (const b of st.buildings) {
     if (b.type !== 'sight') continue;
     const r = buildingDef(b).range ?? 7;
@@ -1037,7 +1074,9 @@ function strike(st: HuntState, att: HuntUnit, p: HuntPlayer, target: { b?: HuntB
     const v = target.u;
     if (v.invulnUntil > st.tick) return;
     if (FIGHTER_KINDS.includes(v.kind)) return; // no se atacan entre ellos
-    let dmg = raw * armorMult((v.kind === 'mage' ? MAGE.armor : 0) + paladinAura(st, v.x, v.y));
+    let dmg = raw * armorMult((v.kind === 'mage' ? MAGE.armor : isSoldier(v.kind) ? SOLDIERS[v.kind].armor - (v.armorDownUntil > st.tick ? v.armorDown : 0) : 0) + paladinAura(st, v.x, v.y));
+    // piel dura del gigante: −2000 por golpe, pero nunca por debajo de 1000
+    if (v.kind === 'giant' && dmg > SOLDIER_SKILLS.giantSkin.min) dmg = Math.max(SOLDIER_SKILLS.giantSkin.min, dmg - SOLDIER_SKILLS.giantSkin.reduce);
     dmg = Math.max(0, dmg);
     // orbe de escarcha del troll: el golpe ralentiza
     if (att.kind === 'hunter') v.chillUntil = st.tick + T(HUNTER.frostSec);
@@ -1204,9 +1243,9 @@ function applyCommand(st: HuntState, map: HuntMap, playerId: string, cmd: HuntCo
   }
   // obreros: moverlos, mandarlos a reparar algo concreto o a un árbol
   if (cmd.k === 'worker' || cmd.k === 'sellunit') {
-    const w = st.units.find((o) => o.id === cmd.id && o.alive && o.owner === playerId && (o.kind === 'repairer' || o.kind === 'lumberjack' || o.kind === 'beast' || o.kind === 'mage'));
+    const w = st.units.find((o) => o.id === cmd.id && o.alive && o.owner === playerId && (o.kind === 'repairer' || o.kind === 'lumberjack' || o.kind === 'beast' || o.kind === 'mage' || isSoldier(o.kind)));
     if (!w) return;
-    const companion = w.kind === 'beast' || w.kind === 'mage';
+    const companion = w.kind === 'beast' || w.kind === 'mage' || isSoldier(w.kind);
     if (cmd.k === 'sellunit' && companion) return;
     const wg = huntBlockedGrid(st, map);
     const releaseTree = () => {
@@ -1279,6 +1318,36 @@ function applyCommand(st: HuntState, map: HuntMap, playerId: string, cmd: HuntCo
     w.anchorY = cmd.y;
     w.order = { k: 'move' };
     routeTo(st, map, wg, w, pointGoal(cmd.x, cmd.y), { x: cmd.x, y: cmd.y });
+    return;
+  }
+  if (cmd.k === 'army') {
+    const b = st.buildings.find((o) => o.id === cmd.id && o.owner === playerId && o.type === 'workshop');
+    const def = SOLDIERS[cmd.kind];
+    if (!b || !def || p.form !== 'elf') return;
+    if (b.level < 5) return reject(ev, playerId, 'Solo la Fortaleza entrena el ejército');
+    if (p.gold < def.gold) return reject(ev, playerId, 'No te alcanza el oro');
+    if (p.wood < def.wood) return reject(ev, playerId, 'No te alcanza la madera');
+    const f = foodOf(st, playerId);
+    if (f.used + def.food > f.cap) return reject(ev, playerId, 'Te falta comida: mejora tu casa');
+    p.gold -= def.gold;
+    p.wood -= def.wood;
+    const wg = huntBlockedGrid(st, map);
+    let sx = b.cx + 0.5;
+    let sy = b.cy + b.size + 0.5;
+    outer: for (let r = 1; r <= 3; r++)
+      for (let j = b.cy - r; j < b.cy + b.size + r; j++)
+        for (let i = b.cx - r; i < b.cx + b.size + r; i++) {
+          if (i < 0 || j < 0 || i >= map.w || j >= map.h || wg[j * map.w + i]) continue;
+          sx = i + 0.5;
+          sy = j + 0.5;
+          break outer;
+        }
+    const s0 = newUnit(st, playerId, cmd.kind, sx, sy, def.hp);
+    // como en el original, se queda donde la entrenas (clic derecho para moverla o que te siga)
+    s0.anchorX = sx;
+    s0.anchorY = sy;
+    if (cmd.kind === 'owl') s0.invisUntil = Number.MAX_SAFE_INTEGER; // invisible siempre
+    ev.push({ e: 'bought', priv: playerId, text: `⚔ ${def.name} listo` });
     return;
   }
   if (cmd.k === 'focus') {
@@ -2036,7 +2105,7 @@ function moveUnit(st: HuntState, map: HuntMap, g: Uint8Array, u: HuntUnit): void
   }
   while (budget > 0 && u.path.length > 0) {
     const [cx, cy] = u.path[0];
-    if (g[cy * map.w + cx]) {
+    if (g[cy * map.w + cx] && u.kind !== 'owl') {
       // alguien construyó en el camino: recalcular
       if (u.goal && st.tick >= u.repathAt) routeTo(st, map, g, u, u.goal, u.dest);
       else u.path = [];
@@ -2173,6 +2242,93 @@ function beastSkills(st: HuntState, u: HuntUnit, ev: HuntEvent[]): void {
   }
 }
 
+// golpe/disparo de una unidad del ejército élfico al cazador, un lobo o el Rastreador
+function soldierAttack(st: HuntState, u: HuntUnit, d: (typeof SOLDIERS)[SoldierKind], tu: HuntUnit, ev: HuntEvent[]): void {
+  const fp = playerOf(st, tu.owner);
+  const fs = fp ? fighterStats(st, fp, tu) : undefined;
+  let raw = d.dmg * (u.roarUntil > st.tick ? 1 + SOLDIER_SKILLS.clawRoar.bonus : 1);
+  let fx = 'mage';
+  if (u.kind === 'bladecar' && rand(st) < SOLDIER_SKILLS.carCrit.chance) {
+    raw *= SOLDIER_SKILLS.carCrit.mult;
+    fx = 'chain';
+  }
+  // rompemagia: quema maná y hace daño por cada punto quemado
+  if (u.kind === 'breaker' && fp) {
+    const burn = Math.min(SOLDIER_SKILLS.breakerBurn, fp.mana ?? 0);
+    fp.mana = (fp.mana ?? 0) - burn;
+    raw += burn * 4;
+  }
+  let dmg = Math.max(0, raw - (fs?.block ?? 0)) * armorMult(fs?.armor ?? 0);
+  if (tu.berserkUntil > st.tick) dmg *= 1.5;
+  if (tu.invulnUntil > st.tick) dmg = 0;
+  tu.hp -= dmg;
+  if (u.kind === 'warder' && dmg > 0) {
+    tu.dotUntil = st.tick + T(SOLDIER_SKILLS.warderPoison.dur);
+    tu.dotDps = Math.max(tu.dotDps, SOLDIER_SKILLS.warderPoison.dps);
+    tu.chillUntil = st.tick + T(SOLDIER_SKILLS.warderPoison.dur);
+    fx = 'poison';
+  }
+  u.atkCd = T(d.cd);
+  u.actUntil = st.tick + T(0.6);
+  u.actX = tu.x;
+  u.actY = tu.y;
+  ev.push({ e: 'shot', x: u.x, y: u.y, tx: tu.x, ty: tu.y, dmg: Math.round(dmg), gold: false, fx });
+  if (tu.hp <= 0) killUnit(st, tu, u.owner, ev);
+  // cazadora elfa: la hoja lunar rebota a otro enemigo cercano (a la mitad)
+  if (u.kind === 'elfhunter') {
+    const next = st.units.find((o) => o !== tu && o.alive && FIGHTER_KINDS.includes(o.kind) && detected(st, o) && Math.hypot(o.x - tu.x, o.y - tu.y) <= toTilesRuntime(400));
+    if (next) {
+      const np = playerOf(st, next.owner);
+      const nd = (d.dmg / 2) * armorMult(np ? fighterStats(st, np, next).armor : 0);
+      next.hp -= nd;
+      ev.push({ e: 'shot', x: tu.x, y: tu.y, tx: next.x, ty: next.y, dmg: Math.round(nd), gold: false, fx: 'mage' });
+      if (next.hp <= 0) killUnit(st, next, u.owner, ev);
+    }
+  }
+}
+
+// habilidades del ejército (las lanzan solas): raíces del árbol, fuego feérico y
+// ciclón del druida raptor, rugido del druida garra
+function soldierSkills(st: HuntState, u: HuntUnit, ev: HuntEvent[]): void {
+  const foe = (r: number) =>
+    st.units
+      .filter((o) => o.alive && FIGHTER_KINDS.includes(o.kind) && detected(st, o) && !magicImmune(st, o) && Math.hypot(o.x - u.x, o.y - u.y) <= r)
+      .sort((a, b) => Math.hypot(a.x - u.x, a.y - u.y) - Math.hypot(b.x - u.x, b.y - u.y))[0];
+  const K = SOLDIER_SKILLS;
+  if (u.kind === 'ctree' && (u.ready.root ?? 0) <= st.tick) {
+    const t = foe(K.ctreeRoot.range);
+    if (t) {
+      t.rootUntil = st.tick + T(K.ctreeRoot.dur);
+      u.ready.root = st.tick + T(K.ctreeRoot.cd);
+      ev.push({ e: 'fx', a: 'roots', x: t.x, y: t.y, r: 0.8, side: 'elf' });
+    }
+  }
+  if (u.kind === 'raptor') {
+    if ((u.ready.fire ?? 0) <= st.tick) {
+      const t = foe(K.raptorFire.range);
+      if (t) {
+        t.armorDown = K.raptorFire.armor;
+        t.armorDownUntil = st.tick + T(K.raptorFire.dur);
+        u.ready.fire = st.tick + T(K.raptorFire.cd);
+        ev.push({ e: 'fx', a: 'blind', x: t.x, y: t.y, r: 0.8, side: 'elf' });
+      }
+    }
+    if ((u.ready.cyclone ?? 0) <= st.tick) {
+      const t = foe(K.raptorCyclone.range);
+      if (t) {
+        t.stunUntil = st.tick + T(K.raptorCyclone.dur);
+        u.ready.cyclone = st.tick + T(K.raptorCyclone.cd);
+        ev.push({ e: 'fx', a: 'stun', x: t.x, y: t.y, r: 0.8, side: 'elf' });
+      }
+    }
+  }
+  if (u.kind === 'claw' && (u.ready.roar ?? 0) <= st.tick && foe(6)) {
+    for (const o of st.units) if (o.alive && isSoldier(o.kind) && sideOfOwner(st, o.owner) === 'elf' && Math.hypot(o.x - u.x, o.y - u.y) <= K.clawRoar.r) o.roarUntil = st.tick + T(K.clawRoar.dur);
+    u.ready.roar = st.tick + T(K.clawRoar.cd);
+    ev.push({ e: 'fx', a: 'bloodlust', x: u.x, y: u.y, r: K.clawRoar.r, side: 'elf' });
+  }
+}
+
 function stepCompanion(st: HuntState, map: HuntMap, g: Uint8Array, u: HuntUnit, ev: HuntEvent[]): void {
   const p = playerOf(st, u.owner);
   if (!p) return;
@@ -2192,7 +2348,9 @@ function stepCompanion(st: HuntState, map: HuntMap, g: Uint8Array, u: HuntUnit, 
   const home = u.anchorX >= 0 ? { x: u.anchorX, y: u.anchorY } : master;
   const s = fighterStats(st, p, u);
   const mySide = sideOfOwner(st, u.owner);
-  const range = u.kind === 'mage' ? MAGE.range : 1.3;
+  const sdef = isSoldier(u.kind) ? SOLDIERS[u.kind] : undefined;
+  const range = u.kind === 'mage' ? MAGE.range : sdef ? sdef.range : 1.3;
+  if (sdef) soldierSkills(st, u, ev);
   // objetivo: el de su amo (rastreador) o el enemigo más cercano a tiro
   let tu: HuntUnit | undefined;
   let tb: HuntBuilding | undefined;
@@ -2214,7 +2372,8 @@ function stepCompanion(st: HuntState, map: HuntMap, g: Uint8Array, u: HuntUnit, 
       if (!o.alive || sideOfOwner(st, o.owner) === mySide || o.invulnUntil > st.tick) continue;
       if (mySide === 'elf' && !detected(st, o)) continue;
       const d = Math.hypot(o.x - u.x, o.y - u.y);
-      if (d < (u.kind === 'mage' ? range : 4) && d < best) {
+      if (sdef && !sdef.dmg) continue; // el búho no ataca
+      if (d < (u.kind === 'mage' ? range : sdef ? Math.max(range, 5) : 4) && d < best) {
         best = d;
         tu = o;
       }
@@ -2228,6 +2387,7 @@ function stepCompanion(st: HuntState, map: HuntMap, g: Uint8Array, u: HuntUnit, 
       u.path = [];
       if (u.atkCd <= 0) {
         if (u.kind === 'beast') strike(st, u, p, tb ? { b: tb } : { u: tu }, ev);
+        else if (tu && sdef) soldierAttack(st, u, sdef, tu, ev);
         else if (tu) {
           // el Mago dispara como una torre
           const fp = playerOf(st, tu.owner);
@@ -2521,7 +2681,7 @@ export function stepHunt(st: HuntState, cmds: HuntPlayerCommand[]): HuntEvent[] 
     if (u.order.k === 'move' && u.path.length === 0) u.order = { k: 'idle' };
   }
   // compañeros con cabeza propia: el rastreador del cazador y el Mago élfico
-  for (const u of st.units) if (u.alive && (u.kind === 'beast' || u.kind === 'mage')) stepCompanion(st, map, g, u, ev);
+  for (const u of st.units) if (u.alive && (u.kind === 'beast' || u.kind === 'mage' || isSoldier(u.kind))) stepCompanion(st, map, g, u, ev);
 
   // daño con el tiempo (quemadura, veneno) y comerse árboles
   for (const u of st.units) {
@@ -2911,7 +3071,7 @@ export function buildHuntSnap(st: HuntState, viewerId: string | null): HuntSnap 
     const ownSide = sameSide(u.owner);
     let visible = ownSide || sees(u.x, u.y) || exposed.has(u.owner);
     // el cazador invisible solo lo ve el bando de colonos si una Atalaya lo detecta
-    if (!ownSide && (FIGHTER_KINDS.includes(u.kind) || u.kind === 'elf') && !detected(st, u)) visible = false;
+    if (!ownSide && (FIGHTER_KINDS.includes(u.kind) || u.kind === 'elf' || u.kind === 'owl') && !detected(st, u)) visible = false;
     if (!visible) continue;
     units.push([u.id, UNIT_KIND_ORDER.indexOf(u.kind), idx.get(u.owner) ?? 0, r2(u.x), r2(u.y), Math.ceil(u.hp), Math.round(u.maxHp), flagsOf(u), u.kind === 'hunter' || u.kind === 'wolf' ? (playerOf(st, u.owner)?.level ?? 1) : u.tier, actDir(st, u)]);
   }

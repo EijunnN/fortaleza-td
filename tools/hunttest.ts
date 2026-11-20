@@ -522,6 +522,40 @@ console.log('maná y murallas del original');
   assert(w2.level === 5, 'la muralla de oro no se elige directamente');
 }
 
+console.log('ejército élfico (Cenarion Keep)');
+{
+  const st = createHunt(13, roster, 'p1');
+  run(st, sec(PHASE.headStartSec) + 1);
+  const ana = P(st, 'p2');
+  const h = huntHunterUnit(st)!;
+  const keep: any = { id: 40001, owner: 'p2', type: 'workshop', level: 5, cx: Math.floor(h.x) + 3, cy: Math.floor(h.y) + 3, size: 2, hp: 400, maxHp: 400, wallBranch: null, towerBranch: 'main', luckArmor: 0, luckReady: 0, invulnUntil: 0, packedUntil: 0, investGold: 0, investWood: 0, eyeUntil: 0, stunUntil: 0, howlUntil: 0, retro: 0, cd: 0, forceUntil: 0 };
+  const house: any = { ...keep, id: 40002, type: 'house', level: 10, cx: keep.cx + 30 };
+  st.buildings.push(keep, house);
+  ana.gold = 1e6;
+  ana.wood = 1e6;
+  const hp0 = h.hp;
+  h.maxHp = h.hp = 1e9; // que aguante para medir
+  run(st, 1, [{ playerId: 'p2', cmd: { k: 'army', id: keep.id, kind: 'elfhunter' } }]);
+  const eh = st.units.find((u) => u.kind === 'elfhunter' && u.alive);
+  assert(!!eh && ana.gold === 1e6 - 5120 && ana.wood === 1e6 - 160, 'la Fortaleza entrena una cazadora elfa (5120 de oro + 160 de madera)');
+  run(st, sec(4));
+  assert(h.hp < 1e9, `la cazadora dispara sola al cazador cercano (${(1e9 - h.hp).toFixed(0)} de daño)`);
+  void hp0;
+  // gigante: piel dura
+  run(st, 1, [{ playerId: 'p2', cmd: { k: 'army', id: keep.id, kind: 'giant' } }]);
+  const gi = st.units.find((u) => u.kind === 'giant' && u.alive)!;
+  assert(!!gi, 'entrena un gigante de montaña');
+  // búho: invisible para el cazador
+  run(st, 1, [{ playerId: 'p2', cmd: { k: 'army', id: keep.id, kind: 'owl' } }]);
+  const owl = st.units.find((u) => u.kind === 'owl' && u.alive)!;
+  assert(!!owl && !buildHuntSnap(st, 'p1').units.some((u) => u[0] === owl.id), 'el búho es invisible para el cazador');
+  // y descubre al cazador invisible
+  h.invisUntil = st.tick + 999;
+  owl.x = h.x + 1;
+  owl.y = h.y;
+  assert(buildHuntSnap(st, 'p2').units.some((u) => u[0] === h.id), 'el búho descubre al cazador invisible');
+}
+
 console.log('WASD (steer)');
 {
   const st = createHunt(2, roster, 'p1');
