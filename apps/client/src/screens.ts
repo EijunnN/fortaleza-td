@@ -921,6 +921,8 @@ export function renderLobby(): void {
   $('lobby-code').textContent = store.roomCode;
 
   const huntLobby = settings.mode === 'hunt';
+  // en la Cacería cada fila lleva una 2ª línea (bando + botones del anfitrión)
+  $('lobby-players').classList.toggle('hunt', huntLobby);
   $('lobby-players').innerHTML = players
     .map((p) => {
       const isMe = p.id === store.playerId;
@@ -967,8 +969,9 @@ export function renderLobby(): void {
       <li class="${p.connected ? '' : 'offline'}">
         <span class="player-dot" style="background:${p.color};color:${p.color}"></span>
         <span class="player-name">${escapeHtml(p.name)}${isMe ? ' (tú)' : ''}</span>
-        ${sideTag}
         ${badge}
+        ${huntLobby ? '<span class="row-break"></span>' : ''}
+        ${sideTag}
         ${cede}
         ${spectate}
         ${kick}

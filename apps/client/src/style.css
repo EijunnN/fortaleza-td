@@ -2928,7 +2928,11 @@ body.q-lite *::after {
 .hunt-side-tag.hunter { background: rgba(255, 90, 78, 0.18); border-color: rgba(255, 90, 78, 0.6); }
 .hunt-side-tag.elf { background: rgba(123, 216, 143, 0.16); border-color: rgba(123, 216, 143, 0.6); }
 .hunt-side-tag.none { opacity: 0.55; }
-/* con los botones de bando, el nombre no se come: la fila puede partirse */
-#lobby-players li:has(.hunt-side-pick) { flex-wrap: wrap; row-gap: 6px; }
-#lobby-players li .player-name { min-width: 5em; }
-#lobby-players li .hunt-side-pick { order: 10; flex-basis: 100%; padding-left: 18px; }
+/* Cacería: cada fila en dos líneas: nombre + estado arriba; bando y botones
+   del anfitrión abajo (antes no cabían y se salían por la derecha) */
+#lobby-players.hunt li { flex-wrap: wrap; row-gap: 6px; }
+#lobby-players.hunt li .player-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#lobby-players.hunt li .row-break { flex-basis: 100%; height: 0; }
+#lobby-players.hunt li .hunt-side-pick,
+#lobby-players.hunt li .hunt-side-tag { margin-left: 18px; margin-right: auto; white-space: nowrap; }
+#lobby-players.hunt li .ready-tag, #lobby-players.hunt li .host-tag { white-space: nowrap; }
