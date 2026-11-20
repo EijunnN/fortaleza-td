@@ -384,7 +384,7 @@ export const WALL_BRANCHES: Record<WallBranch, BranchSpec> = {
   ice: {
     name: 'Hielo',
     icon: 'hk:wall-ice',
-    pitch: 'Congela a quien la golpea: le quita cadencia de ataque (−12 % y llega a −140 %). Su remate, el Glaciar, esquiva golpes.',
+    pitch: 'Congela a quien la golpea: le resta velocidad de ataque (−12 % y llega a −140 %; nunca baja de −80 % en total). Un troll con guantes lo compensa. Su remate, el Glaciar, esquiva golpes.',
     hp6: 340,
     gold6: 136,
     armor6: 4,

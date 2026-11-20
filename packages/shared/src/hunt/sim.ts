@@ -811,7 +811,7 @@ export function fighterStats(st: HuntState, p: HuntPlayer, u: HuntUnit | undefin
     dmg: HUNTER.dmg + HUNTER.dmgPerLevel * L + itemSum(p, 'weapon') + tk.agi * ATTR.dmgPerAgi,
     armor: HUNTER.armor + HUNTER.armorPerLevel * L + itemSum(p, 'armor') + tk.agi * ATTR.armorPerAgi - (u && u.armorDownUntil > st.tick ? u.armorDown : 0),
     regen: HUNTER.regenPerLevel * L + itemSum(p, 'regen') + tk.str * ATTR.regenPerStr + maxHp * tk.regenPct,
-    attackSec: HUNTER.attackSec / (1 + Math.max(-0.9, as)),
+    attackSec: HUNTER.attackSec / (1 + Math.max(-0.8, as)),
     speed,
     block: tk.block,
   };
@@ -1060,7 +1060,13 @@ function strike(st: HuntState, att: HuntUnit, p: HuntPlayer, target: { b?: HuntB
     if (b.type !== 'wall' || b.wallBranch !== 'ice') continue;
     if (distToRect(att.x, att.y, b.cx, b.cy, 1, 1) <= 1.5) slow = Math.max(slow, buildingDef(b).slowAura ?? 0);
   }
-  att.atkCd = T(s.attackSec / Math.max(0.2, 1 - slow));
+  // Como en el WC3: el freno del hielo se RESTA a la velocidad de ataque (no la
+  // multiplica) y el total se recorta entre −80 % y +400 %. Así un troll recién
+  // salido casi no puede pegar a una muralla de hielo alta, pero uno con guantes sí.
+  const baseSec = att.kind === 'beast' ? BEAST.attackSec : HUNTER.attackSec;
+  const bonus = baseSec / s.attackSec - 1;
+  const total = Math.min(1 + HUNTER.maxAttackSpeed, Math.max(0.2, 1 + bonus - slow));
+  att.atkCd = T(baseSec / total);
   const plunder = att.kind === 'beast' ? BEAST.plunder : 1;
   let raw = s.dmg;
   // cegado: el golpe se pierde
