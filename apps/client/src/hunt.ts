@@ -57,6 +57,9 @@ import {
   type UnitKind,
   type WallBranch,
   RESOURCE_MULT,
+  TOWER_FORKS,
+  TOWER_GREEN_FINAL,
+  WOOD_BULK,
   TILE_FLOOR,
   TILE_TREE,
   steerStep,
@@ -126,8 +129,10 @@ const tintCache = new Map<string, HTMLCanvasElement>(); // elfo pintado del colo
 const anim = new Map<number, { dir: Dir; walk: number; x: number; y: number; movedAt: number }>();
 const corpses: { kind: string; x: number; y: number; born: number }[] = [];
 // altura dibujada (en casillas) de cada personaje con hoja de sprites
-const SPRITE_TILES: Record<string, number> = { elf: 1.3, hunter: 2.05, wolf: 1.2, angel: 1.3 };
-const STRIDE: Record<string, number> = { elf: 0.3, hunter: 0.42, wolf: 0.36, angel: 0.34 }; // casillas por paso
+const SPRITE_TILES: Record<string, number> = { elf: 1.3, hunter: 2.05, wolf: 1.2, angel: 1.3, repairer: 1.05, lumberjack: 1.05 };
+const STRIDE: Record<string, number> = { elf: 0.3, hunter: 0.42, wolf: 0.36, angel: 0.34, repairer: 0.26, lumberjack: 0.26 }; // casillas por paso
+// personajes cuya ropa verde se pinta del color del jugador
+const TINTED = new Set(['elf', 'repairer', 'lumberjack']);
 interface Mote {
   x: number;
   y: number;
@@ -327,6 +332,7 @@ function build(): void {
       <div class="hk-res" id="hk-res"></div>
       <div class="hk-clock" id="hk-clock"></div>
       <div class="hk-team" id="hk-team"></div>
+      <button class="hk-endbtn" id="hk-endbtn" data-act="endhunt" hidden title="Terminar la partida ahora (solo el anfitrión)">Terminar</button>
     </div>
     <div class="hk-banner" id="hk-banner" hidden></div>
     <div class="hk-toasts"></div>
@@ -748,6 +754,7 @@ function trigger(a: Ability): void {
   }
   placing = null;
   if (def.target === 'point' || def.target === 'building') targeting = targeting === a ? null : a;
+  else if (a === 'recall' && mouse.in) send({ k: 'ability', a, x: mouse.x, y: mouse.y }); // señalando a un aliado, vas con él
   else send({ k: 'ability', a });
 }
 
@@ -863,6 +870,9 @@ function onUiClick(e: Event): void {
     case 'follow':
       if (inspect) send({ k: 'worker', id: inspect, follow: true });
       break;
+    case 'endhunt':
+      if (window.confirm('¿Terminar la partida ahora? Todos volverán a la sala.')) net.send({ type: 'end_hunt' });
+      break;
     case 'unfocus':
       if (selected) send({ k: 'focus', id: selected, target: 0 });
       break;
@@ -912,7 +922,10 @@ function onUiClick(e: Event): void {
       break;
     }
     case 'buywood':
-      send({ k: 'buywood' });
+      send({ k: 'buywood', bulk: v === 'bulk' });
+      break;
+    case 'wolves':
+      send({ k: 'wolves', allow: v === 'on' });
       break;
     case 'hut':
       send({ k: 'hut' });
@@ -1366,7 +1379,7 @@ function syncCard(): void {
     const bootsSlot = bootsHtml(m.boots, true);
     card = `<div class="hk-group"><div class="hk-label">Habilidades</div><div class="hk-row">${abilities}</div></div>
       <div class="hk-group"><div class="hk-label">Inventario</div><div class="hk-row inv">${inv}<span class="hk-sep"></span>${bootsSlot}</div></div>
-      <div class="hk-group"><div class="hk-label">Guarida</div><div class="hk-row"><button class="hk-btn ab shopbtn${shopOpen ? ' on' : ''}" data-act="shop" data-tip="Tienda de la guarida (G). Solo se compra estando cerca."><span class="ic">${icon('hk:shop')}</span><kbd>G</kbd>${m.nearShop ? '<span class="dot"></span>' : ''}</button></div></div>`;
+      <div class="hk-group"><div class="hk-label">Guarida</div><div class="hk-row"><button class="hk-btn ab shopbtn${shopOpen ? ' on' : ''}" data-act="shop" data-tip="Tienda de la guarida (G). Solo se compra estando cerca."><span class="ic">${icon('hk:shop')}</span><kbd>G</kbd>${m.nearShop ? '<span class="dot"></span>' : ''}</button>${m.form === 'hunter' ? `<button class="hk-btn ab${m.allowWolves ? ' on' : ''}" data-act="wolves" data-v="${m.allowWolves ? 'off' : 'on'}" data-tip="${esc(m.allowWolves ? '<b>Admites lobos</b><br>Los colonos que caigan pueden unirse a ti como lobos. Clic para no admitirlos.' : '<b>No admites lobos</b><br>Los caídos solo pueden volver como ángeles. Clic para admitirlos.')}"><span class="ic">${icon('hk:wolf')}</span><span class="ct">${m.allowWolves ? 'sí' : 'no'}</span></button>` : ''}</div></div>`;
   } else if (m.form === 'angel') {
     card = `<div class="hk-group"><div class="hk-label">Ángel · ayuda a los colonos</div><div class="hk-row">${abilities}</div></div>
       <div class="hk-hint">Señala un edificio de los colonos y pulsa R para repararlo. Roba oro junto a la guarida del cazador.</div>`;
@@ -1394,7 +1407,7 @@ function syncPanel(): void {
   }
   const { type, wall, tower, def } = buildingInfo(b);
   const level = b[5];
-  const maxLv = type === 'wall' ? wallMaxLevel(wall) : levelsOf(type);
+  const maxLv = type === 'wall' ? wallMaxLevel(wall) : type === 'tower' && level === TOWER_GREEN_FINAL ? level : levelsOf(type);
   const lines: string[] = [];
   lines.push(`<div class="bar hp"><i style="width:${(b[6] / b[7]) * 100}%"></i><span>${fmt(b[6])} / ${fmt(b[7])}</span></div>`);
   const stat = (k: string, v: string) => `<span class="st"><em>${k}</em>${v}</span>`;
@@ -1419,6 +1432,16 @@ function syncPanel(): void {
         return `<button class="hk-branch${!afford(nd.gold, nd.wood) || req ? ' poor' : ''}" data-act="upgrade" data-v="${br}" data-tip="${esc(`<b>${WALL_BRANCHES[br].name}</b> · ${fmt(nd.hp)} de vida, armadura ${nd.armor}<br>${WALL_BRANCHES[br].pitch}`)}">
           <span class="ic">${icon(WALL_BRANCHES[br].icon)}</span><b>${WALL_BRANCHES[br].name}</b><small>${costHtml(nd.gold, nd.wood)}</small></button>`;
       }).join('')}</div>`;
+    } else if (type === 'tower' && TOWER_FORKS[level]) {
+      // bifurcación: elegir rama (como en el original)
+      up = `<div class="hk-label">Elige cómo sigue</div><div class="hk-branches two">${TOWER_FORKS[level]
+        .map((f) => {
+          const nd = levelDef('tower', f.level, null, 'main');
+          const req = reqText(nd.req);
+          const tip = `<b>${nd.name}</b><br>vida ${fmt(nd.hp)} · daño ${fmt(nd.dmg ?? 0)} · alcance ${(nd.range ?? 0).toFixed(1)}${f.level === TOWER_GREEN_FINAL ? '<br><em>Final de su rama: no sube más.</em>' : ''}${f.level === 13 ? '<br><em>Se salta el Dragón negro.</em>' : ''}`;
+          return `<button class="hk-branch${!afford(nd.gold, nd.wood) || req ? ' poor' : ''}" data-act="upgrade" data-v="${f.branch}" data-tip="${esc(tip)}"><span class="ic">${icon('hk:tower')}</span><b>${nd.name}</b><small>${costHtml(nd.gold, nd.wood)}</small></button>`;
+        })
+        .join('')}</div>`;
     } else {
       const nd = levelDef(type, level + 1, wall, tower);
       const req = reqText(nd.req);
@@ -1454,7 +1477,8 @@ function syncPanel(): void {
       .map((w, i) => {
         const req = reqText(w.req);
         const info = kind === 'repairer' ? `repara el edificio entero en ${Math.round(50 * (w.ratio ?? 1))} s · comida ${w.food}` : `${(w.woodPerSec ?? 0) * RESOURCE_MULT} de madera/s`;
-        return `<button class="hk-btn tr${!afford(w.gold, 0) || req ? ' poor' : ''}" data-act="train" data-v="${kind}" data-n="${i}" data-tip="${esc(`<b>${w.name}</b> · ${costHtml(w.gold, 0)}<br>${info}${req ? `<br><em>${req}</em>` : ''}`)}">
+        const extra = w.name === 'Paladín' ? '<br>Luz sagrada al edificio más dañado, Armadura sagrada y +3 de armadura alrededor.' : '';
+        return `<button class="hk-btn tr${!afford(w.gold, w.wood ?? 0) || req ? ' poor' : ''}" data-act="train" data-v="${kind}" data-n="${i}" data-tip="${esc(`<b>${w.name}</b> · ${costHtml(w.gold, w.wood ?? 0)}<br>${info}${extra}${req ? `<br><em>${req}</em>` : ''}`)}">
           <span class="ic">${icon(kind === 'repairer' ? 'hk:repairer' : 'hk:lumberjack')}</span><span class="lv">${i + 1}</span><span class="ct">${fmt(w.gold)}</span></button>`;
       })
       .join('')}</div>`;
@@ -1527,6 +1551,7 @@ function syncShop(): void {
       })
       .join('')}
     <button class="hk-item${afford(WOOD_FOR_GOLD, 0) && m.nearShop ? '' : ' poor'}" data-act="buywood" data-tip="${esc(`<b>1 de madera</b><br>Para los objetos rúnicos.<br>${costHtml(WOOD_FOR_GOLD, 0)}`)}"><span class="ic">${icon('hk:item-wood')}</span><span class="ct">${fmt(WOOD_FOR_GOLD)}</span></button>
+    <button class="hk-item${afford(WOOD_BULK.gold, 0) && m.nearShop ? '' : ' poor'}" data-act="buywood" data-v="bulk" data-tip="${esc(`<b>${WOOD_BULK.wood} de madera</b><br>Al por mayor, algo más baratas.<br>${costHtml(WOOD_BULK.gold, 0)}`)}"><span class="ic">${icon('hk:item-wood')}</span><span class="v">×${WOOD_BULK.wood}</span><span class="ct">${fmt(WOOD_BULK.gold)}</span></button>
     ${m.form === 'hunter' ? `<button class="hk-item hut${nextHut && afford(nextHut.cost, 0) ? '' : ' poor'}" data-act="hut" data-tip="${esc(nextHut ? `<b>Mejorar la guarida</b><br>${m.hutIncome} → ${nextHut.income * RESOURCE_MULT} de oro/s<br>${costHtml(nextHut.cost, 0)}` : 'Guarida al máximo')}"><span class="ic">${icon('hk:hut')}</span><span class="v">nv ${m.hutLevel}</span><span class="ct">${nextHut ? fmt(nextHut.cost) : 'máx'}</span></button>` : ''}
   </div></div>`;
   const html = `<div class="hk-panel-head"><span class="ic big">${icon('hk:shop')}</span><div><b>Tienda de la guarida</b><small>${m.nearShop ? 'Dos objetos iguales se funden en el siguiente nivel' : 'Acércate a la guarida para comprar'}</small></div><button data-act="close" data-v="shop">✕</button></div>${lines}${extras}`;
@@ -1543,7 +1568,9 @@ function syncChoose(): void {
       <p class="hk-sub">Sigues en la partida. Elige cómo vuelves:</p>
       <div class="hk-choices two">
         <button class="hk-choice angel" data-act="form" data-v="angel"><span class="ic">${icon('hk:angel')}</span><b>Ángel</b><small>Ayudas a los colonos: reparas sus edificios, aturdes al cazador y le robas oro en su guarida.</small></button>
-        <button class="hk-choice wolf" data-act="form" data-v="wolf"><span class="ic">${icon('hk:wolf')}</span><b>Lobo</b><small>Te pasas al cazador: golpeas y cobras oro por cada golpe, compras en su guarida. Empiezas con oro según los minutos de partida.</small></button>
+        ${cur?.snap.wolves === false
+          ? `<button class="hk-choice wolf off" disabled><span class="ic">${icon('hk:wolf')}</span><b>Lobo</b><small>El cazador no admite lobos en esta partida.</small></button>`
+          : `<button class="hk-choice wolf" data-act="form" data-v="wolf"><span class="ic">${icon('hk:wolf')}</span><b>Lobo</b><small>Te pasas al cazador: golpeas y cobras oro por cada golpe, compras en su guarida. Empiezas con oro según los minutos de partida.</small></button>`}
       </div></div>`;
     setHtml('hk-modal', html);
     hashes.choose = html;
@@ -1796,17 +1823,20 @@ function hslRgb(h: number, s2: number, l: number): [number, number, number] {
 
 // la túnica verde del elfo se pinta del color del jugador (una vez por color)
 function sheetImage(kind: string, color: string): CanvasImageSource {
-  if (kind !== 'elf') return unitAtlas;
-  const hit = tintCache.get(color);
+  if (!TINTED.has(kind)) return unitAtlas;
+  const key = `${kind}|${color}`;
+  const hit = tintCache.get(key);
   if (hit) return hit;
-  const sh = UNIT_SHEETS.elf;
+  const sh = UNIT_SHEETS[kind];
+  // solo la franja del atlas de este personaje (mismas coordenadas que el atlas)
+  const y0 = Math.min(...sh.frames.map((f) => f[1]));
   const h = Math.max(...sh.frames.map((f) => f[1])) + sh.h;
   const c = document.createElement('canvas');
   c.width = unitAtlas.width;
   c.height = h;
   const cx = c.getContext('2d', { willReadFrequently: true })!;
-  cx.drawImage(unitAtlas, 0, 0);
-  const img = cx.getImageData(0, 0, c.width, h);
+  cx.drawImage(unitAtlas, 0, y0, unitAtlas.width, h - y0, 0, y0, unitAtlas.width, h - y0);
+  const img = cx.getImageData(0, y0, c.width, h - y0);
   const d = img.data;
   const [th, ts] = hexHsl(color);
   for (let i = 0; i < d.length; i += 4) {
@@ -1818,8 +1848,8 @@ function sheetImage(kind: string, color: string): CanvasImageSource {
     d[i + 1] = g1;
     d[i + 2] = b;
   }
-  cx.putImageData(img, 0, 0);
-  tintCache.set(color, c);
+  cx.putImageData(img, 0, y0);
+  tintCache.set(key, c);
   return c;
 }
 
@@ -1881,7 +1911,7 @@ function drawUnit(u: HuntSnapUnit, x: number, y: number, now: number, moving: bo
   const worker = kind === 'repairer' || kind === 'lumberjack';
   const sheet = unitAtlasOk ? UNIT_SHEETS[kind] : undefined;
   // obrero trabajando: se pega a su árbol/edificio (sombra incluida)
-  const working = !sheet && worker && (u[9] ?? 0) > 0;
+  const working = worker && (u[9] ?? 0) > 0;
   if (working) {
     const [vx, vy] = DIR_VEC[u[9] - 1];
     x += vx * s * (kind === 'lumberjack' ? 0.5 : 0.36);
@@ -1944,7 +1974,7 @@ function drawUnit(u: HuntSnapUnit, x: number, y: number, now: number, moving: bo
     g.fillRect(x - size, y - size - s * 0.3, size * 2, size * 2);
   }
   // obreros trabajando: pegados a su árbol o edificio, dando hachazos/martillazos
-  if (working) {
+  if (working && !sheet) {
     const [vx] = DIR_VEC[u[9] - 1];
     const swing = Math.sin(now / 85);
     g.translate(x, y - s * 0.06 - Math.max(0, swing) * s * 0.04);
@@ -2500,6 +2530,7 @@ export function isHuntActive(): boolean {
 export function startHunt(i: HuntInit): void {
   build();
   // partida nueva (no una reconexión a la misma): se olvida TODO lo de la anterior
+  root.querySelector<HTMLElement>('#hk-endbtn')!.hidden = !isHostFlag;
   const fresh = !active || init?.gameId !== i.gameId || init?.hunterId !== i.hunterId || init.youAre !== i.youAre;
   init = i;
   active = true;
@@ -2541,6 +2572,13 @@ export function startHunt(i: HuntInit): void {
   void PHASE;
 }
 
+// el anfitrión ve el botón de terminar la partida
+let isHostFlag = false;
+export function setHuntHost(host: boolean): void {
+  isHostFlag = host;
+  if (built) root.querySelector<HTMLElement>('#hk-endbtn')!.hidden = !host;
+}
+
 export function onHuntTick(snap: HuntSnap, events: HuntEvent[]): void {
   if (!active) return;
   prev = cur;
@@ -2555,14 +2593,15 @@ export function onHuntOver(result: HuntResult, backToLobby: () => void): void {
   }
   const mine = result.players.find((p) => p.id === init!.youAre);
   const won = mine ? (mine.role === 'hunter') === (result.winner === 'hunter') : null;
-  const why = result.reason === 'hunter_dead' ? 'El cazador ha caído.' : 'No queda ningún colono en pie.';
+  const why = result.reason === 'ended' ? 'El anfitrión terminó la partida.' : result.reason === 'hunter_dead' ? 'El cazador ha caído.' : 'No queda ningún colono en pie.';
+  const ended = result.reason === 'ended';
   const mm = Math.floor(result.seconds / 60);
   const ss = String(result.seconds % 60).padStart(2, '0');
   const formName: Record<string, string> = { hunter: 'Cazador', elf: 'Colono', angel: 'Ángel', wolf: 'Lobo', choosing: 'Caído', dead: 'Caído' };
   const end = root.querySelector<HTMLElement>('#hk-end')!;
   end.innerHTML = `<div class="hk-end-box ${result.winner}">
     <div class="hk-end-icon">${icon(result.winner === 'hunter' ? 'hk:troll' : 'hk:house')}</div>
-    <h2>${won === null ? (result.winner === 'hunter' ? 'Gana el cazador' : 'Ganan los colonos') : won ? '¡Victoria!' : 'Derrota'}</h2>
+    <h2>${ended ? 'Partida terminada' : won === null ? (result.winner === 'hunter' ? 'Gana el cazador' : 'Ganan los colonos') : won ? '¡Victoria!' : 'Derrota'}</h2>
     <p>${why} La cacería duró ${mm}:${ss}.</p>
     <table>
       <thead><tr><th>Jugador</th><th>Papel</th><th>Oro</th><th>Daño</th><th>Edif.</th><th>Bajas</th></tr></thead>

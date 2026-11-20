@@ -10,6 +10,8 @@ import {
   levelDef,
   buildHuntSnap,
   createHunt,
+  fighterStats,
+  ITEMS,
   createHuntBotMemory,
   getHuntMap,
   huntBotCommands,
@@ -123,7 +125,9 @@ console.log('economía, requisitos y murallas');
   const gold0 = hunter.gold;
   const hp0 = wall.hp;
   run(st, 3, [{ playerId: 'p1', cmd: { k: 'attack', target: wall.id } }]);
-  const expected = Math.max(1, 5 - 1) * armorMult(5);
+  // daño del troll al nivel 1 = 5 + 2 de agilidad de los talentos (Ojo EX y hueco de botas)
+  const tdmg = fighterStats(st, hunter, h).dmg;
+  const expected = Math.max(1, tdmg - 1) * armorMult(5);
   assert(Math.abs(hp0 - wall.hp - expected) < 0.01, `cada golpe hace ${expected.toFixed(2)} a la muralla (armadura y cemento)`);
   assert(hunter.gold - gold0 >= Math.floor(expected), 'y el cazador cobra el daño hecho en oro');
 
@@ -195,7 +199,7 @@ console.log('torres, golpes y papeles al morir');
   ana.x = h.x + 1;
   ana.y = h.y;
   run(st, 1, [{ playerId: 'p1', cmd: { k: 'attack', target: ana.id } }]);
-  assert(ana.alive && ana.hp === 5, 'el primer golpe deja al colono a media vida');
+  assert(ana.alive && ana.hp === 10 - fighterStats(st, P(st, 'p1'), h).dmg, `el primer golpe no lo mata (queda a ${ana.hp} de 10): hacen falta dos`);
   run(st, sec(2));
   assert(!ana.alive, 'el segundo lo mata');
   assert(P(st, 'p1').gold >= 75 + 67, 'el cazador se lleva el 67 % del oro del colono');
@@ -244,7 +248,7 @@ console.log('tienda, fusión de objetos y niveles');
   const weapons = hp.inv.filter((s) => s?.kind === 'item' && s.line === 'weapon');
   assert(weapons.length === 1 && weapons[0]!.kind === 'item' && weapons[0]!.tier === 1, 'dos espadas cortas se funden en una espada (+4)');
   run(st, 1, [{ playerId: 'p1', cmd: { k: 'buy', line: 'life', tier: 0 } }]);
-  assert(huntHunterUnit(st)!.maxHp === 1000, 'el corazón sube la vida máxima a 1000');
+  assert(huntHunterUnit(st)!.maxHp === 750 + 250 + 50, `el corazón sube la vida máxima +250 (${huntHunterUnit(st)!.maxHp}: 750 + 250 + 50 por los +2 de fuerza de los talentos)`);
   hp.xp = 199;
   const h = huntHunterUnit(st)!;
   run(st, sec(PHASE.headStartSec) + 1);
@@ -349,13 +353,148 @@ console.log('reglas completas del original');
   angel.x = e3.x + 1;
   angel.y = e3.y;
   angel.invulnUntil = 0;
+  // sin el olfato del Rastreador (descubre invisibles: se prueba justo después)
+  st2.eyes = st2.eyes.filter((e) => !e.detect);
+  for (const u of st2.units) if (u.kind === 'beast') u.ready.detect = st2.tick + 99999;
   run(st2, 1, [{ playerId: 'p2', cmd: { k: 'ability', a: 'occult', x: e3.x, y: e3.y } }]);
   const view = buildHuntSnap(st2, 'p1');
   h2.x = e3.x + 2;
   h2.y = e3.y;
   const view2 = buildHuntSnap(st2, 'p1');
   assert(!view2.units.some((u) => u[0] === e3.id) && e3.occultUntil > st2.tick, 'el velo lunar hace invisible al colono para el cazador');
+  st2.eyes.push({ side: 'hunter', detect: true, x: e3.x, y: e3.y, r: 5, until: st2.tick + 50 });
+  assert(buildHuntSnap(st2, 'p1').units.some((u) => u[0] === e3.id), 'pero el olfato (lobo o Rastreador) lo descubre');
   void view;
+}
+
+console.log('lo que faltaba (2): troll, objetos, torres, Paladín, Rastreador');
+{
+  // armadura base del troll y talentos (+1 a todo, +1 más con el hueco de botas vacío)
+  const st = createHunt(7, roster, 'p1');
+  const hp = P(st, 'p1');
+  const h = huntHunterUnit(st)!;
+  const fs0 = fighterStats(st, hp, h);
+  assert(Math.abs(fs0.armor - (3.9 + 2 * 0.5)) < 1e-6, `armadura del troll al nivel 1: 3,9 + agilidad de talentos (${fs0.armor})`);
+  // botas: velocidad y agilidad
+  hp.gold += 1000;
+  run(st, 1, [{ playerId: 'p1', cmd: { k: 'buy', line: 'boots', tier: 0 } }]);
+  const fs1 = fighterStats(st, hp, h);
+  assert(hp.boots === 0 && Math.abs(fs1.armor - (3.9 + (1 + 2) * 0.5)) < 1e-6, `las botas dan +2 de agilidad (y se pierde el +1 del hueco vacío): armadura ${fs1.armor}`);
+  // escarcha: el golpe del troll ralentiza al colono 3 s
+  run(st, sec(PHASE.headStartSec) + 1);
+  const elf = mainUnit(st, 'p2')!;
+  elf.x = h.x + 0.8;
+  elf.y = h.y;
+  const ana = P(st, 'p2');
+  ana.gold = 0;
+  elf.hp = 1000; // que aguante para medir
+  elf.maxHp = 1000;
+  run(st, sec(2), [{ playerId: 'p1', cmd: { k: 'attack', target: elf.id } }]);
+  assert(elf.chillUntil > st.tick, 'el golpe del troll deja al colono con escarcha (más lento)');
+  // madera al por mayor
+  hp.gold = 600000;
+  h.x = map.camp.x + 0.5;
+  h.y = map.camp.y + 2.5;
+  const w0 = hp.wood;
+  run(st, 1, [{ playerId: 'p1', cmd: { k: 'buywood', bulk: true } }]);
+  assert(hp.wood - w0 === 8 && hp.gold === 100000, `8 de madera por 500 000 de oro (${hp.wood - w0}, quedan ${hp.gold})`);
+  // objetos nuevos en la tienda
+  const names = (line: string) => (ITEMS as any)[line].tiers.map((t: any) => t.name);
+  assert(names('armor').includes('Égida del fin') && names('regen').includes('Savia eterna III') && names('life').includes('Corazón eterno III') && names('gloves').includes('Garras del caos'), 'están el último escudo, regeneración y vida de madera y los últimos guantes');
+  // lobos: el cazador puede no admitirlos
+  run(st, 1, [{ playerId: 'p1', cmd: { k: 'wolves', allow: false } }]);
+  assert(buildHuntSnap(st, 'p2').wolves === false, 'el cazador puede no admitir lobos');
+  run(st, 1, [{ playerId: 'p1', cmd: { k: 'wolves', allow: true } }]);
+
+  // Rastreador: red al colono cercano y olfato que descubre invisibles
+  hp.wood = 20;
+  elf.x = map.camp.x + 30.5; // lejos al comprarlo
+  elf.y = map.camp.y + 0.5;
+  run(st, 1, [{ playerId: 'p1', cmd: { k: 'beast' } }]);
+  const beast = st.units.find((u) => u.kind === 'beast' && u.alive)!;
+  assert(!!beast, 'compra el Rastreador');
+  elf.x = beast.x + 3;
+  elf.y = beast.y;
+  elf.rootUntil = 0;
+  run(st, 2);
+  assert(st.units.some((o) => o.alive && (o.kind === 'elf' || o.kind === 'repairer' || o.kind === 'lumberjack') && o.rootUntil > st.tick) && (beast.ready.ensnare ?? 0) > st.tick, 'el Rastreador lanza su red a un colono cercano (inmóvil 5 s)');
+  assert(st.eyes.some((e) => e.detect && e.side === 'hunter'), 'el Rastreador olfatea: descubre invisibles a su alrededor');
+}
+{
+  // dos trolls: «Regreso» señalando al otro troll te lleva con él
+  const st = createHunt(8, roster, ['p1', 'p3']);
+  run(st, sec(PHASE.headStartSec) + 1);
+  const a = mainUnit(st, 'p1')!;
+  const b = mainUnit(st, 'p3')!;
+  b.x = map.camp.x + 12.5;
+  b.y = map.camp.y + 0.5;
+  run(st, sec(3), [{ playerId: 'p1', cmd: { k: 'ability', a: 'recall', x: b.x, y: b.y } }]);
+  assert(Math.hypot(a.x - b.x, a.y - b.y) < 1, `«Regreso» señalando a un aliado te lleva con él (${a.x.toFixed(1)},${a.y.toFixed(1)})`);
+  assert(st.players.filter((p) => p.form === 'hunter').length === 2, 'puede haber dos trolls');
+}
+{
+  // torres: el Dragón puede saltar al de hielo; el Altar acaba en verde O misterio
+  const st = createHunt(9, roster, 'p1');
+  const ana = P(st, 'p2');
+  const elf = mainUnit(st, 'p2')!;
+  elf.x = inner.x + 0.5;
+  elf.y = inner.y + 0.5;
+  run(st, sec(5), [{ playerId: 'p2', cmd: { k: 'build', type: 'tower', cx: inner.x + 1, cy: inner.y } }]);
+  const t = st.buildings.find((b) => b.type === 'tower')!;
+  assert(!!t, 'construye una torre');
+  if (t) {
+    ana.gold = 1e9;
+    ana.wood = 1e9;
+    // tecnología máxima para la prueba: una Fortaleza (taller nivel 5) de mentira
+    st.buildings.push({ ...t, id: 99999, type: 'workshop', level: 5, cx: t.cx, cy: t.cy + 30, size: 2 });
+    t.level = 11;
+    run(st, 1, [{ playerId: 'p2', cmd: { k: 'upgrade', id: t.id, branch: 'ice' } }]);
+    assert(t.level === 13 || st.players.length < 0, `desde la Torre del dragón se puede saltar al Dragón de hielo (nivel ${t.level})`);
+    t.level = 14;
+    run(st, 1, [{ playerId: 'p2', cmd: { k: 'upgrade', id: t.id } }]);
+    assert(t.level === 14, 'en el Altar maldito hay que elegir rama');
+    run(st, 1, [{ playerId: 'p2', cmd: { k: 'upgrade', id: t.id, branch: 'green' } }]);
+    assert(t.level === 15, 'Altar → Dragón verde');
+    run(st, 1, [{ playerId: 'p2', cmd: { k: 'upgrade', id: t.id } }]);
+    assert(t.level === 15, 'el Dragón verde es el final de su rama');
+    t.level = 14;
+    run(st, 1, [{ playerId: 'p2', cmd: { k: 'upgrade', id: t.id, branch: 'mystery' } }]);
+    assert(t.level === 16, 'Altar → Torre del misterio');
+  }
+}
+
+{
+  // Paladín (madera y Luz sagrada) y la Hacha del fin (daño en área)
+  const bld = (id: number, type: string, level: number, cx: number, cy: number, size: number): any => ({ id, owner: 'p2', type, level, cx, cy, size, hp: 100, maxHp: 100, wallBranch: null, towerBranch: 'main', luckArmor: 0, luckReady: 0, invulnUntil: 0, packedUntil: 0, investGold: 0, investWood: 0, eyeUntil: 0, stunUntil: 0, howlUntil: 0, retro: 0, cd: 0, forceUntil: 0 });
+  const st = createHunt(10, roster, 'p1');
+  const ana = P(st, 'p2');
+  const ws = bld(60001, 'workshop', 5, houseCell.x, houseCell.y, 2); // Fortaleza: tecnología máxima
+  st.buildings.push(ws, bld(60002, 'house', 10, houseCell.x + 3, houseCell.y, 2));
+  ana.gold = 100000;
+  ana.wood = 300;
+  run(st, 1, [{ playerId: 'p2', cmd: { k: 'train', id: ws.id, unit: 'repairer', tier: 5 } }]);
+  const pal = st.units.find((u) => u.kind === 'repairer' && u.tier === 5 && u.alive);
+  assert(!!pal && ana.wood === 300 - 256, `el Paladín cuesta 256 de madera además del oro (madera ${ana.wood})`);
+  if (pal) {
+    ws.hp = ws.maxHp * 0.2;
+    const hp0 = ws.hp;
+    run(st, 2);
+    assert(ws.hp - hp0 > ws.maxHp * 0.2, `Luz sagrada: cura de golpe 5 + 35 % de lo que falta (${hp0.toFixed(0)} → ${ws.hp.toFixed(0)})`);
+  }
+  // Hacha del fin: el golpe al edificio también daña a los de alrededor
+  const st2 = createHunt(11, roster, 'p1');
+  run(st2, sec(PHASE.headStartSec) + 1);
+  const hp = P(st2, 'p1');
+  const h = huntHunterUnit(st2)!;
+  hp.inv[0] = { kind: 'item', line: 'weapon', tier: ITEMS.weapon.tiers.length - 1 };
+  const mk = (id: number, cx: number) => ({ id, owner: 'p2', type: 'wall' as const, level: 1, cx, cy: Math.floor(h.y) - 2, size: 1, hp: 1e12, maxHp: 1e12, wallBranch: null, towerBranch: 'main' as const, luckArmor: 0, luckReady: 0, invulnUntil: 0, packedUntil: 0, investGold: 0, investWood: 0, eyeUntil: 0, stunUntil: 0, howlUntil: 0, retro: 0, cd: 0, forceUntil: 0 });
+  const w1: any = mk(70001, Math.floor(h.x));
+  const w2: any = mk(70002, Math.floor(h.x) + 1);
+  st2.buildings.push(w1, w2);
+  h.y = w1.cy + 1.5;
+  h.x = w1.cx + 0.5;
+  run(st2, 3, [{ playerId: 'p1', cmd: { k: 'attack', target: w1.id } }]);
+  assert(w1.hp < 1e12 && w2.hp < 1e12, 'la Hacha del fin daña también el edificio de al lado');
 }
 
 console.log('WASD (steer)');

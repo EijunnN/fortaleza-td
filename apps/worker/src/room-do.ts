@@ -2323,6 +2323,12 @@ export class RoomDO {
       // fuerza): la petición solo toca el RoomPlayer del emisor. Validaciones: solo
       // en el lobby, solo en mapas multi-ruta, índice de ruta existente y NO ocupado
       // por otro. door=null libera. Se libera sola al salir (el RoomPlayer se quita).
+      case 'end_hunt':
+        if (!this.hunt || this.hunt.over || !player.isHost) break;
+        this.hunt.over = { winner: 'colonist', reason: 'ended' };
+        this.finishHunt(this.hunt);
+        break;
+
       case 'hunt_side': {
         if (this.game || this.hunt) break; // solo en el lobby
         const side = msg.side === 'hunter' || msg.side === 'elf' ? msg.side : undefined;

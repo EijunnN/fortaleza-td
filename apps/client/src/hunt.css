@@ -612,3 +612,20 @@
   cursor: pointer;
 }
 .hk-chat-ch.all { border-color: rgba(255, 205, 69, 0.6); background: rgba(255, 205, 69, 0.12); }
+.hk-endbtn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  transform: translateY(calc(100% + 96px));
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 90, 78, 0.45);
+  background: rgba(255, 90, 78, 0.12);
+  color: #ffb4ad;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.hk-endbtn[hidden] { display: none; }

@@ -43,6 +43,13 @@ void (async () => {
   c.send({ type: 'chat', text: 'hola a todos' });
   await sleep(600);
   ok([host, b].every((x) => x.msgs.some((m) => m.type === 'chat' && m.text === 'hola a todos')), 'el chat general llega a todos');
+  // solo el anfitrión puede terminar la partida
+  b.send({ type: 'end_hunt' });
+  await sleep(500);
+  ok(!host.msgs.some((m) => m.type === 'hunt_over'), 'un jugador que no es anfitrión no puede terminarla');
+  host.send({ type: 'end_hunt' });
+  for (let i = 0; i < 30 && !c.msgs.some((m) => m.type === 'hunt_over'); i++) await sleep(100);
+  ok(c.msgs.find((m) => m.type === 'hunt_over')?.result?.reason === 'ended', 'el anfitrión termina la partida y todos vuelven a la sala');
   for (const x of [host, b, c]) x.ws.close();
   console.log(failed ? `\n${failed} FALLOS` : '\nTODO OK');
   process.exit(failed ? 1 : 0);

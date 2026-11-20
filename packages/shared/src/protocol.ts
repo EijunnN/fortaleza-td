@@ -429,6 +429,8 @@ export type ClientMsg =
   | { type: 'claim_door'; door: number | null }
   // Cacería: elegir bando antes de empezar (null = me da igual)
   | { type: 'hunt_side'; side: 'hunter' | 'elf' | null }
+  // Cacería: el anfitrión termina la partida antes de tiempo (el -end del original)
+  | { type: 'end_hunt' }
   | { type: 'start_game' }
   | { type: 'chat'; text: string; team?: boolean }
   | { type: 'cmd'; cmd: Command }

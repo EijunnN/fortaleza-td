@@ -27,7 +27,11 @@ import {
   MARKET,
   MAX_LUMBERJACKS,
   PHASE,
+  PALADIN,
+  TOWER_FORKS,
+  TOWER_GREEN_FINAL,
   RESOURCE_MULT,
+  WOOD_BULK,
   REPAIRERS,
   REPAIR_BASE_SEC,
   SHOP_RADIUS,
@@ -94,6 +98,7 @@ export interface HuntPlayer {
   spec: Spec | null;
   skinUsed: boolean;
   boots: number; // nivel de las botas (hueco aparte; −1 sin botas)
+  allowWolves: boolean; // cazador: ¿deja que los caídos se le unan como lobos?
   str: number; // atributos permanentes de los libros
   agi: number;
   chooseUntil: number; // colono caído: tick límite para elegir ángel o lobo
@@ -124,6 +129,9 @@ export interface HuntUnit {
   sx: number; // dirección de WASD (-1, 0, 1); 0,0 = sin teclas
   sy: number;
   claimAt: number; // último tick en que el cliente corrigió su posición (WASD)
+  chillUntil: number; // escarcha del troll: −25 % de velocidad
+  recallTo: number; // «Regreso» hacia un aliado (id de unidad; 0 = a la guarida)
+  ready: Record<string, number>; // recargas propias (Rastreador, Paladín): tick en que vuelve a estar lista
   anchorX: number; // obrero movido con el ratón: trabaja alrededor de aquí (−1 = donde sea)
   anchorY: number;
   actUntil: number; // golpeando o reparando hasta este tick (para la animación)
@@ -199,6 +207,7 @@ export interface HuntTrap {
 }
 export interface HuntEye {
   side: Side;
+  detect?: boolean; // también descubre invisibles (Olfato del lobo y del Rastreador)
   x: number;
   y: number;
   r: number;
@@ -232,7 +241,7 @@ export interface HuntState {
   hutLevel: number;
   hunterId: string;
   releaseTick: number;
-  over: null | { winner: 'hunter' | 'colonist'; reason: 'hunter_dead' | 'all_dead' };
+  over: null | { winner: 'hunter' | 'colonist'; reason: 'hunter_dead' | 'all_dead' | 'ended' };
   treeTaken: Map<number, number>; // casilla de árbol → id del leñador
   deadTrees: Map<number, number>; // árboles comidos → tick a partir del cual pueden volver
   nightUntil: number; // Luz de luna: noche forzada
@@ -258,7 +267,9 @@ export type HuntCommand =
   | { k: 'ability'; a: Ability; x?: number; y?: number; target?: number }
   | { k: 'buy'; line: ItemLine; tier: number }
   | { k: 'buycons'; c: Consumable }
-  | { k: 'buywood' }
+  | { k: 'buywood'; bulk?: boolean }
+  // el cazador admite (o no) que los colonos caídos se le unan como lobos
+  | { k: 'wolves'; allow: boolean }
   | { k: 'sell'; slot: number }
   | { k: 'use'; slot: number; x?: number; y?: number }
   | { k: 'hut' }
@@ -326,6 +337,9 @@ function newUnit(st: HuntState, owner: string, kind: UnitKind, x: number, y: num
     sx: 0,
     sy: 0,
     claimAt: 0,
+    chillUntil: 0,
+    recallTo: 0,
+    ready: {},
     anchorX: -1,
     anchorY: -1,
     actUntil: 0,
@@ -416,6 +430,7 @@ export function createHunt(seed: number, roster: { id: string; name: string; col
       spec: null,
       skinUsed: false,
       boots: -1,
+      allowWolves: true,
       str: 0,
       agi: 0,
       chooseUntil: 0,
@@ -730,7 +745,13 @@ export function fighterStats(st: HuntState, p: HuntPlayer, u: HuntUnit | undefin
     return { maxHp: MAGE.hp, dmg: MAGE.dmg, armor: MAGE.armor, regen: MAGE.regen, attackSec: MAGE.cd, speed: MAGE.speed, block: 0 };
   }
   const L = p.level - 1;
-  const tk = trinkets(p);
+  const tk = { ...trinkets(p) };
+  // agilidad de las botas y talentos del troll (Ojo EX +1 a todo; hueco de botas
+  // vacío +1 a todo)
+  const bootsAgi = p.boots >= 0 ? (ITEMS.boots.tiers[p.boots].agi ?? 0) : 0;
+  const talent = p.form === 'hunter' ? HUNTER.talentAttr + (p.boots < 0 ? HUNTER.emptyBootsAttr : 0) : 0;
+  tk.agi += bootsAgi + talent;
+  tk.str += talent;
   let as = HUNTER.asPerLevel * L + itemSum(p, 'gloves') + HUNTER.focusBase + tk.as + tk.agi * ATTR.asPerAgi + (u ? u.focus * HUNTER.focusPerHit : 0);
   if (u && u.berserkUntil > st.tick) as += 1;
   if (u && u.bloodlustUntil > st.tick) as += 0.5;
@@ -759,6 +780,9 @@ export function fighterStats(st: HuntState, p: HuntPlayer, u: HuntUnit | undefin
 }
 
 function unitSpeed(st: HuntState, u: HuntUnit): number {
+  return baseSpeed(st, u) * (u.chillUntil > st.tick ? 1 - HUNTER.frostSlow : 1);
+}
+function baseSpeed(st: HuntState, u: HuntUnit): number {
   const p = playerOf(st, u.owner);
   switch (u.kind) {
     case 'hunter':
@@ -827,6 +851,8 @@ function inVision(src: [number, number, number][], x: number, y: number): boolea
 // ¿Ve el bando de colonos al cazador invisible? Solo si una Atalaya lo cubre.
 function detected(st: HuntState, u: HuntUnit): boolean {
   if (u.invisUntil <= st.tick && u.occultUntil <= st.tick) return true;
+  const side = sideOfOwner(st, u.owner);
+  for (const e of st.eyes) if (e.detect && e.side !== side && e.until > st.tick && Math.hypot(e.x - u.x, e.y - u.y) <= e.r) return true;
   for (const b of st.buildings) {
     if (b.type !== 'sight') continue;
     const r = buildingDef(b).range ?? 7;
@@ -949,6 +975,20 @@ function killUnit(st: HuntState, u: HuntUnit, killerOwner: string | null, ev: Hu
 }
 
 // Golpe de un luchador del bando del cazador (cazador o lobo) a un objetivo.
+// +3 de armadura cerca de un Paladín vivo (aura de concentración)
+function paladinAura(st: HuntState, x: number, y: number): number {
+  for (const o of st.units) {
+    if (!o.alive || o.kind !== 'repairer' || o.tier !== REPAIRERS.length - 1) continue;
+    if (Math.hypot(o.x - x, o.y - y) <= PALADIN.aura.r) return PALADIN.aura.armor;
+  }
+  return 0;
+}
+function weaponSplash(p: HuntPlayer): number {
+  let r = 0;
+  for (const it of p.inv) if (it?.kind === 'item' && it.line === 'weapon') r = Math.max(r, ITEMS.weapon.tiers[it.tier].splash ?? 0);
+  return r;
+}
+
 function strike(st: HuntState, att: HuntUnit, p: HuntPlayer, target: { b?: HuntBuilding; u?: HuntUnit }, ev: HuntEvent[]): void {
   const s = fighterStats(st, p, att);
   const map = getHuntMap();
@@ -984,8 +1024,10 @@ function strike(st: HuntState, att: HuntUnit, p: HuntPlayer, target: { b?: HuntB
     const v = target.u;
     if (v.invulnUntil > st.tick) return;
     if (FIGHTER_KINDS.includes(v.kind)) return; // no se atacan entre ellos
-    let dmg = raw * armorMult(v.kind === 'mage' ? MAGE.armor : 0);
+    let dmg = raw * armorMult((v.kind === 'mage' ? MAGE.armor : 0) + paladinAura(st, v.x, v.y));
     dmg = Math.max(0, dmg);
+    // orbe de escarcha del troll: el golpe ralentiza
+    if (att.kind === 'hunter') v.chillUntil = st.tick + T(HUNTER.frostSec);
     v.hp -= dmg;
     const gold = Math.floor(Math.min(dmg, v.hp + dmg) * plunder) * RESOURCE_MULT;
     pay(p, gold);
@@ -1004,8 +1046,28 @@ function strike(st: HuntState, att: HuntUnit, p: HuntPlayer, target: { b?: HuntB
   const def = buildingDef(b);
   if (def.extraDamageTaken) raw += def.extraDamageTaken;
   if (def.flatReduce) raw = Math.max(1, raw - def.flatReduce);
-  const dmg = Math.min(b.hp, raw * armorMult(def.armor + b.luckArmor));
+  const dmg = Math.min(b.hp, raw * armorMult(def.armor + b.luckArmor + paladinAura(st, b.cx + b.size / 2, b.cy + b.size / 2)));
   b.hp -= dmg;
+  // «Hacha del fin»: golpea al 100 % a los edificios enemigos alrededor
+  const splash = att.kind === 'hunter' ? weaponSplash(p) : 0;
+  if (splash > 0) {
+    const bx = b.cx + b.size / 2;
+    const by = b.cy + b.size / 2;
+    for (const o of [...st.buildings]) {
+      if (o === b || o.owner === p.id || distToRect(bx, by, o.cx, o.cy, o.size, o.size) > splash) continue;
+      if (o.invulnUntil > st.tick || o.packedUntil > st.tick) continue;
+      const od = buildingDef(o);
+      const sd = Math.min(o.hp, s.dmg * armorMult(od.armor + o.luckArmor + paladinAura(st, o.cx + o.size / 2, o.cy + o.size / 2)));
+      o.hp -= sd;
+      const sg = Math.floor(sd * plunder) * RESOURCE_MULT;
+      pay(p, sg);
+      p.stats.damage += sd;
+      if (o.hp <= 0.001) {
+        razeBuilding(st, o, ev, true);
+        giveXp(st, p, xpForKill(o.level), ev);
+      }
+    }
+  }
   const gold = Math.floor(dmg * plunder) * RESOURCE_MULT;
   pay(p, gold);
   p.stats.damage += dmg;
@@ -1054,8 +1116,14 @@ function applyCommand(st: HuntState, map: HuntMap, playerId: string, cmd: HuntCo
   const num = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 
   // elegir papel tras caer (no necesita unidad)
+  if (cmd.k === 'wolves') {
+    if (p.form !== 'hunter') return;
+    p.allowWolves = cmd.allow === true;
+    return;
+  }
   if (cmd.k === 'form') {
     if (p.form !== 'choosing' || (cmd.f !== 'angel' && cmd.f !== 'wolf')) return;
+    if (cmd.f === 'wolf' && !wolvesAllowed(st)) return reject(ev, playerId, 'El cazador no admite lobos');
     becomeRole(st, p, cmd.f, ev);
     return;
   }
@@ -1102,7 +1170,8 @@ function applyCommand(st: HuntState, map: HuntMap, playerId: string, cmd: HuntCo
       releaseTree();
       w.alive = false;
       p.gold = Math.min(GOLD_CAP, p.gold + Math.floor(def.gold / 2));
-            ev.push({ e: 'bought', priv: playerId, text: `Vendido: ${def.name} (+${Math.floor(def.gold / 2)} de oro)` });
+      p.wood += Math.floor((def.wood ?? 0) / 2);
+      ev.push({ e: 'bought', priv: playerId, text: `Vendido: ${def.name} (+${Math.floor(def.gold / 2)} de oro)` });
       return;
     }
     if (companion) {
@@ -1291,9 +1360,10 @@ function applyCommand(st: HuntState, map: HuntMap, playerId: string, cmd: HuntCo
       return;
     }
     if (cmd.k === 'buywood') {
-      if (p.gold < WOOD_FOR_GOLD) return reject(ev, playerId, 'No te alcanza el oro');
-      p.gold -= WOOD_FOR_GOLD;
-      p.wood += 1;
+      const cost = cmd.bulk ? WOOD_BULK.gold : WOOD_FOR_GOLD;
+      if (p.gold < cost) return reject(ev, playerId, 'No te alcanza el oro');
+      p.gold -= cost;
+      p.wood += cmd.bulk ? WOOD_BULK.wood : 1;
       return;
     }
     if (cmd.k === 'sell') {
@@ -1525,7 +1595,17 @@ function upgradeBuilding(st: HuntState, p: HuntPlayer, b: HuntBuilding, branch: 
     wallBranch = branch as WallBranch;
   }
   if (b.type === 'tower' && b.level === 2 && branch === 'gold') towerBranch = 'gold';
-  const next = levelDef(b.type, b.level + 1, wallBranch, towerBranch);
+  let step = 1;
+  if (b.type === 'tower') {
+    if (b.level === TOWER_GREEN_FINAL) return reject(ev, p.id, 'El Dragón verde es el final de su rama');
+    const fork = TOWER_FORKS[b.level];
+    if (fork) {
+      const pick = fork.find((f) => f.branch === branch) ?? (b.level === 11 ? fork[0] : undefined);
+      if (!pick) return reject(ev, p.id, `Elige: ${fork.map((f) => f.name).join(' o ')}`);
+      step = pick.level - b.level;
+    }
+  }
+  const next = levelDef(b.type, b.level + step, wallBranch, towerBranch);
   const rq = reqError(st, p.id, next.req);
   if (rq) return reject(ev, p.id, rq);
   if (p.gold < next.gold) return reject(ev, p.id, 'No te alcanza el oro');
@@ -1533,7 +1613,7 @@ function upgradeBuilding(st: HuntState, p: HuntPlayer, b: HuntBuilding, branch: 
   p.gold -= next.gold;
   p.wood -= next.wood;
   const frac = b.hp / b.maxHp;
-  b.level += 1;
+  b.level += step;
   b.wallBranch = wallBranch;
   b.towerBranch = towerBranch;
   b.maxHp = next.hp;
@@ -1553,6 +1633,7 @@ function trainWorker(st: HuntState, map: HuntMap, p: HuntPlayer, b: HuntBuilding
   const rq = reqError(st, p.id, def.req);
   if (rq) return reject(ev, p.id, rq);
   if (p.gold < def.gold) return reject(ev, p.id, 'No te alcanza el oro');
+  if (p.wood < (def.wood ?? 0)) return reject(ev, p.id, 'No te alcanza la madera');
   if (kind === 'repairer') {
     const f = foodOf(st, p.id);
     if (f.used + def.food > f.cap) return reject(ev, p.id, 'Te falta comida: mejora tu casa');
@@ -1560,6 +1641,7 @@ function trainWorker(st: HuntState, map: HuntMap, p: HuntPlayer, b: HuntBuilding
     return reject(ev, p.id, `Máximo ${MAX_LUMBERJACKS} leñadores`);
   }
   p.gold -= def.gold;
+  p.wood -= def.wood ?? 0;
   // aparece junto al edificio, en la primera casilla libre
   const g = huntBlockedGrid(st, map);
   let sx = b.cx + 0.5;
@@ -1575,6 +1657,11 @@ function trainWorker(st: HuntState, map: HuntMap, p: HuntPlayer, b: HuntBuilding
   }
   newUnit(st, p.id, kind, sx, sy, def.hp, tier);
   ev.push({ e: 'bought', priv: p.id, text: `${def.name}` });
+}
+
+// ¿algún cazador vivo admite lobos?
+export function wolvesAllowed(st: HuntState): boolean {
+  return st.players.some((q) => q.form === 'hunter' && q.alive && q.allowWolves !== false);
 }
 
 function becomeRole(st: HuntState, p: HuntPlayer, f: 'angel' | 'wolf', ev: HuntEvent[]): void {
@@ -1688,7 +1775,7 @@ function castAbility(
     }
     case 'detect': {
       const r = def.radius ?? 12;
-      st.eyes.push({ side: p.side, x: tx, y: ty, r, until: st.tick + dur });
+      st.eyes.push({ side: p.side, detect: true, x: tx, y: ty, r, until: st.tick + dur });
       ev.push({ e: 'fx', a: 'eye', x: tx, y: ty, r, side: p.side });
       break;
     }
@@ -1757,12 +1844,21 @@ function castAbility(
     case 'trap':
       st.traps.push({ id: st.nextId++, owner: p.id, x: tx, y: ty, until: st.tick + T(300) });
       break;
-    case 'recall':
+    case 'recall': {
       u.path = [];
       u.goal = null;
       u.order = { k: 'idle' };
       u.channelEnd = st.tick + dur;
+      // «Transmisión»: si señalas a un aliado (otro troll o un lobo), vas con él
+      u.recallTo = 0;
+      if (Number.isFinite(cmd.x) && Number.isFinite(cmd.y)) {
+        const ally = st.units.find(
+          (o) => o !== u && o.alive && (o.kind === 'hunter' || o.kind === 'wolf') && sideOfOwner(st, o.owner) === 'hunter' && Math.hypot(o.x - cmd.x!, o.y - cmd.y!) <= 1.2,
+        );
+        if (ally) u.recallTo = ally.id;
+      }
       break;
+    }
     case 'steal': {
       if (Math.hypot(u.x - (map.camp.x + 0.5), u.y - (map.camp.y + 0.5)) > (def.range ?? 2.5) + 0.5) return reject(ev, p.id, 'Acércate a la guarida del cazador');
       const gold = goldUnit(huntMinute(st)) * RESOURCE_MULT;
@@ -1895,8 +1991,15 @@ function stepFighter(st: HuntState, map: HuntMap, g: Uint8Array, u: HuntUnit, p:
   if (u.channelEnd > 0 && st.tick >= u.channelEnd) {
     u.channelEnd = 0;
     ev.push({ e: 'fx', a: 'recall', x: u.x, y: u.y, side: 'hunter' });
-    u.x = map.camp.x + 0.5;
-    u.y = map.camp.y + 2.5;
+    const ally = u.recallTo ? st.units.find((o) => o.id === u.recallTo && o.alive) : undefined;
+    u.recallTo = 0;
+    if (ally) {
+      u.x = ally.x;
+      u.y = ally.y;
+    } else {
+      u.x = map.camp.x + 0.5;
+      u.y = map.camp.y + 2.5;
+    }
     u.path = [];
     u.order = { k: 'idle' };
   }
@@ -1959,10 +2062,46 @@ function stepFighter(st: HuntState, map: HuntMap, g: Uint8Array, u: HuntUnit, p:
 
 // Rastreador (bando del cazador) y Mago élfico (bando de los colonos): van con su
 // amo, atacan lo que ataca él o lo que tengan cerca, y vuelven si se alejan.
+// habilidades del Rastreador (las lanza solo): antimagia si lo inmovilizan,
+// olfato (descubre invisibles alrededor), red al colono más cercano y paso del
+// viento cuando persigue algo lejano
+function beastSkills(st: HuntState, u: HuntUnit, ev: HuntEvent[]): void {
+  const B = BEAST;
+  if ((u.stunUntil > st.tick || u.rootUntil > st.tick) && (u.ready.ams ?? 0) <= st.tick) {
+    u.stunUntil = 0;
+    u.rootUntil = 0;
+    u.immuneUntil = st.tick + T(B.ams.dur);
+    u.ready.ams = st.tick + T(B.ams.cd);
+    ev.push({ e: 'fx', a: 'ams', x: u.x, y: u.y, side: 'hunter' });
+  }
+  if ((u.ready.detect ?? 0) <= st.tick) {
+    st.eyes.push({ side: 'hunter', detect: true, x: u.x, y: u.y, r: B.detect.r, until: st.tick + T(B.detect.dur) });
+    u.ready.detect = st.tick + T(B.detect.cd);
+  }
+  if ((u.ready.ensnare ?? 0) <= st.tick && u.stunUntil <= st.tick) {
+    let prey: HuntUnit | undefined;
+    let best = B.ensnare.range;
+    for (const o of st.units) {
+      if (!o.alive || sideOfOwner(st, o.owner) !== 'elf' || o.kind === 'angel' || o.invulnUntil > st.tick || !detected(st, o) || magicImmune(st, o)) continue;
+      const d = Math.hypot(o.x - u.x, o.y - u.y);
+      if (d <= best) {
+        best = d;
+        prey = o;
+      }
+    }
+    if (prey) {
+      prey.rootUntil = st.tick + T(B.ensnare.dur);
+      u.ready.ensnare = st.tick + T(B.ensnare.cd);
+      ev.push({ e: 'fx', a: 'roots', x: prey.x, y: prey.y, r: 0.8, side: 'hunter' });
+    }
+  }
+}
+
 function stepCompanion(st: HuntState, map: HuntMap, g: Uint8Array, u: HuntUnit, ev: HuntEvent[]): void {
   const p = playerOf(st, u.owner);
   if (!p) return;
   if (u.atkCd > 0) u.atkCd -= 1;
+  if (u.kind === 'beast') beastSkills(st, u, ev);
   if (u.stunUntil > st.tick) return;
   // movido con el ratón: primero llega (sin distraerse)
   if (u.order.k === 'move') {
@@ -2025,6 +2164,10 @@ function stepCompanion(st: HuntState, map: HuntMap, g: Uint8Array, u: HuntUnit, 
       }
     } else if (st.tick >= u.repathAt || u.path.length === 0) {
       routeTo(st, map, g, u, tb ? buildingGoal(tb) : pointGoal(tx, ty));
+      if (u.kind === 'beast' && Math.hypot(tx - u.x, ty - u.y) > 5 && (u.ready.wind ?? 0) <= st.tick) {
+        u.invisUntil = st.tick + T(BEAST.windwalk.dur);
+        u.ready.wind = st.tick + T(BEAST.windwalk.cd);
+      }
     }
   } else if (home && Math.hypot(home.x - u.x, home.y - u.y) > (u.anchorX >= 0 ? 0.6 : 2.5) && (st.tick >= u.repathAt || u.path.length === 0)) {
     routeTo(st, map, g, u, pointGoal(home.x, home.y));
@@ -2063,6 +2206,27 @@ function reachableTree(st: HuntState, map: HuntMap, g: Uint8Array, x: number, y:
     }
   }
   return -1;
+}
+
+// Paladín: Luz sagrada al edificio aliado más dañado a su alcance y Armadura
+// sagrada cuando le hacen daño (el aura de armadura va en paladinAura)
+function paladinSkills(st: HuntState, u: HuntUnit): void {
+  if ((u.ready.light ?? 0) <= st.tick) {
+    let best: HuntBuilding | undefined;
+    for (const b of st.buildings) {
+      if (sideOfOwner(st, b.owner) !== 'elf' || b.hp >= b.maxHp - 0.5) continue;
+      if (distToRect(u.x, u.y, b.cx, b.cy, b.size, b.size) > PALADIN.holyLight.range) continue;
+      if (!best || b.maxHp - b.hp > best.maxHp - best.hp) best = b;
+    }
+    if (best) {
+      best.hp = Math.min(best.maxHp, best.hp + PALADIN.holyLight.base + (best.maxHp - best.hp) * PALADIN.holyLight.missing);
+      u.ready.light = st.tick + T(PALADIN.holyLight.cd);
+    }
+  }
+  if (u.hp < u.maxHp * 0.5 && (u.ready.armor ?? 0) <= st.tick) {
+    u.invulnUntil = st.tick + T(PALADIN.holyArmor.dur);
+    u.ready.armor = st.tick + T(PALADIN.holyArmor.cd);
+  }
 }
 
 function stepWorker(st: HuntState, map: HuntMap, g: Uint8Array, u: HuntUnit): void {
@@ -2124,6 +2288,7 @@ function stepWorker(st: HuntState, map: HuntMap, g: Uint8Array, u: HuntUnit): vo
     u.work = target?.id ?? 0;
     if (target) routeTo(st, map, g, u, buildingGoal(target));
   }
+  if (u.tier === REPAIRERS.length - 1) paladinSkills(st, u);
   if (!target) return;
   if (touchesBuilding(u, target)) {
     const tier = REPAIRERS[u.tier];
@@ -2484,6 +2649,7 @@ export interface HuntSnapMe {
   respawn: number;
   dest: [number, number] | null;
   speed: number; // casillas/s reales de tu unidad (para predecir el WASD)
+  allowWolves: boolean; // cazador: ¿admite lobos?
   steer: [number, number]; // dirección de WASD que el servidor ya aplicó
   channel: number;
   hutLevel: number;
@@ -2519,6 +2685,7 @@ export interface HuntSnap {
   shops: [number, number][];
   vision: [number, number, number][];
   reveal: boolean;
+  wolves: boolean; // ¿algún cazador admite lobos?
   over: null | { winner: 'hunter' | 'colonist'; reason: string };
 }
 
@@ -2580,6 +2747,7 @@ export function buildHuntSnap(st: HuntState, viewerId: string | null): HuntSnap 
       respawn: viewer.respawnAt > 0 ? secsLeft(viewer.respawnAt - st.tick) : 0,
       dest: u && u.path.length > 0 ? u.path[u.path.length - 1] : null,
       speed: u ? Math.round(unitSpeed(st, u) * 1000) / 1000 : 0,
+      allowWolves: viewer.allowWolves !== false,
       steer: u ? [u.sx, u.sy] : [0, 0],
       channel: u && u.channelEnd > 0 ? secsLeft(u.channelEnd - st.tick) : 0,
       hutLevel: st.hutLevel,
@@ -2688,6 +2856,7 @@ export function buildHuntSnap(st: HuntState, viewerId: string | null): HuntSnap 
     eyes: st.eyes.filter((e) => v.all || e.side === v.side).map((e) => [r2(e.x), r2(e.y), e.r]),
     vision: v.src.map(([x, y, r]) => [r2(x), r2(y), r2(r)]),
     reveal: v.all,
+    wolves: wolvesAllowed(st),
     over: st.over,
   };
 }

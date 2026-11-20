@@ -90,7 +90,7 @@ export const HUNTER = {
   hp: 750,
   dmg: 5,
   attackSec: 1.5,
-  armor: 0,
+  armor: 3.9,
   speed: toTiles(350),
   visionDay: toTiles(1400),
   visionNight: toTiles(1100),
@@ -107,6 +107,14 @@ export const HUNTER = {
   focusSec: 2.5, // …que caducan si deja de pegar
   focusBase: 0.05,
   maxSpeed: toTiles(522),
+  // «Deceleración pasiva» (orbe de escarcha A0KS): sus golpes ralentizan 3 s. El
+  // mapa no trae el porcentaje; se usa un 25 % (el orbe de escarcha de WC3)
+  frostSec: 3,
+  frostSlow: 0.25,
+  // talentos que se aprenden juntos al nivel 1: Ojo EX (+1 a todo) y el hueco
+  // de botas, que si está vacío da otro +1 a todo
+  talentAttr: 1,
+  emptyBootsAttr: 1,
 } as const;
 
 // XP acumulada para alcanzar cada nivel (curva de WC3: 200, 500, 900, 1400…)
@@ -517,6 +525,20 @@ const TOWER_GOLD: LevelDef[] = [
   { name: 'Cristal oscuro dorado', hp: 250, armor: 4, gold: 1024, wood: 32, dmg: 64, cd: 0.8, range: toTiles(750), goldPerHit: 16, req: { tech: 4 }, chain: true },
 ];
 export const TOWER_MAX_LEVEL = TOWER_MAIN.length;
+// Bifurcaciones del original: la Torre del dragón (11) puede saltarse el Dragón
+// negro e ir al de hielo (13); el Altar maldito (14) acaba en Dragón verde (15)
+// O en Torre del misterio (16), y el Dragón verde ya no sube más.
+export const TOWER_FORKS: Record<number, { branch: string; level: number; name: string }[]> = {
+  11: [
+    { branch: 'black', level: 12, name: 'Dragón negro' },
+    { branch: 'ice', level: 13, name: 'Dragón de hielo' },
+  ],
+  14: [
+    { branch: 'green', level: 15, name: 'Dragón verde' },
+    { branch: 'mystery', level: 16, name: 'Torre del misterio' },
+  ],
+};
+export const TOWER_GREEN_FINAL = 15;
 // la rama de oro ocupa los niveles 3-8 y al 9 vuelve a la línea principal
 export function huntTowerLevel(level: number, branch: TowerBranch): LevelDef {
   if (branch === 'gold' && level >= 3 && level <= 8) return TOWER_GOLD[level - 3];
@@ -591,6 +613,7 @@ export interface WorkerTier {
   gold: number;
   hp: number;
   food: number;
+  wood?: number;
   ratio?: number; // reparador: tarda 50 s × ratio en reparar un edificio entero
   woodPerSec?: number; // leñador
   req?: Req;
@@ -602,7 +625,9 @@ export const REPAIRERS: WorkerTier[] = [
   { name: 'Autómata de cuerda', gold: 512, hp: 80, food: 16, ratio: 1.5, req: { tech: 2 } },
   { name: 'Autómata de acero', gold: 2048, hp: 160, food: 16, ratio: 1, req: { tech: 3 } },
   { name: 'Maestro de obras', gold: 8192, hp: 320, food: 32, ratio: 0.5, req: { tech: 4 } },
-  { name: 'Arquitecto', gold: 32768, hp: 640, food: 32, ratio: 0.2, req: { tech: 5 } },
+  // e005 Paladin: 32 768 de oro + 256 de madera; repara, Luz sagrada, Armadura
+  // sagrada y aura de +3 de armadura (A02W..A02Z)
+  { name: 'Paladín', gold: 32768, wood: 256, hp: 800, food: 32, ratio: 0.2, req: { tech: 5 } },
 ];
 export const LUMBERJACKS: WorkerTier[] = [
   { name: 'Leñador torpe', gold: 520, hp: 20, food: 0, woodPerSec: 0.2 },
@@ -613,6 +638,8 @@ export const LUMBERJACKS: WorkerTier[] = [
   { name: 'Leñador incansable', gold: 80000, hp: 640, food: 0, woodPerSec: 55, req: { tech: 5 } },
   { name: 'Leñador loco', gold: 255000, hp: 1280, food: 0, woodPerSec: 255, req: { tech: 5 } },
   { name: 'Espíritu del bosque', gold: 1_000_000, hp: 2560, food: 0, woodPerSec: 2200, req: { tech: 5 } },
+  // e00E Bright elf: 1 M de oro + 1 M de madera, 10 000 de madera/s (A038)
+  { name: 'Elfo brillante', gold: 1_000_000, wood: 1_000_000, hp: 5120, food: 0, woodPerSec: 10000, req: { tech: 5 } },
 ];
 export const MAX_LUMBERJACKS = 12;
 export const WORKER_SPEED = toTiles(270);
@@ -768,6 +795,8 @@ export interface ItemTier {
   gold: number;
   wood: number;
   value: number; // daño / armadura / vida / regen / % cadencia / velocidad (casillas/s)
+  agi?: number; // botas: también dan agilidad
+  splash?: number; // arma final: golpea al 100 % en este radio (casillas)
   merge: number; // copias del nivel anterior que se funden en este (0 = no viene de fusión)
 }
 const t = (name: string, icon: string, gold: number, wood: number, value: number, merge = 2): ItemTier => ({ name, icon, gold, wood, value, merge });
@@ -788,7 +817,7 @@ export const ITEMS: Record<ItemLine, { name: string; stat: string; tiers: ItemTi
       t('Hacha rúnica II', 'hk:item-axe', 0, 2, 2560),
       t('Hacha rúnica III', 'hk:item-axe', 0, 8, 10240, 4),
       t('Hacha rúnica IV', 'hk:item-axe', 0, 32, 40960, 4),
-      t('Hacha del fin', 'hk:item-axe', 0, 128, 163840, 4),
+      { ...t('Hacha del fin', 'hk:item-axe', 0, 128, 163840, 4), splash: toTiles(200) },
     ],
   },
   armor: {
@@ -804,6 +833,7 @@ export const ITEMS: Record<ItemLine, { name: string; stat: string; tiers: ItemTi
       t('Égida rúnica II', 'hk:item-shield', 0, 2, 1280),
       t('Égida rúnica III', 'hk:item-shield', 0, 8, 5120, 4),
       t('Égida rúnica IV', 'hk:item-shield', 0, 32, 20480, 4),
+      t('Égida del fin', 'hk:item-shield', 0, 128, 81920, 4),
     ],
   },
   life: {
@@ -820,6 +850,7 @@ export const ITEMS: Record<ItemLine, { name: string; stat: string; tiers: ItemTi
       t('Corazón ancestral', 'hk:item-hp', 12800, 0, 32000),
       t('Corazón eterno', 'hk:item-hp', 0, 1, 160000, 5),
       t('Corazón eterno II', 'hk:item-hp', 0, 2, 320000),
+      t('Corazón eterno III', 'hk:item-hp', 0, 8, 500000, 4),
     ],
   },
   regen: {
@@ -833,6 +864,7 @@ export const ITEMS: Record<ItemLine, { name: string; stat: string; tiers: ItemTi
       t('Amuleto ancestral', 'hk:item-regen', 12800, 0, 512),
       t('Savia eterna', 'hk:item-regen', 0, 1, 2560, 5),
       t('Savia eterna II', 'hk:item-regen', 0, 2, 5120),
+      t('Savia eterna III', 'hk:item-regen', 0, 8, 20480, 4),
     ],
   },
   gloves: {
@@ -845,20 +877,23 @@ export const ITEMS: Record<ItemLine, { name: string; stat: string; tiers: ItemTi
       t('Guanteletes de furia', 'hk:item-gloves', 1000, 0, 1),
       t('Garras de furia', 'hk:item-gloves', 2000, 0, 2),
       t('Garras del frenesí', 'hk:item-gloves', 4000, 0, 4),
+      // I03V: +800 % en el papel, pero el juego topa la cadencia en +400 %
+      t('Garras del caos', 'hk:item-gloves', 8000, 0, 8),
     ],
   },
   boots: {
     name: 'Botas',
     stat: 'velocidad',
     tiers: [
-      t('Botas', 'hk:item-boots', 200, 0, toTiles(120), 0),
-      t('Botas rápidas', 'hk:item-boots', 400, 0, toTiles(135), 0),
-      t('Botas del viento', 'hk:item-boots', 800, 0, toTiles(150), 0),
+      { ...t('Botas', 'hk:item-boots', 200, 0, toTiles(120), 0), agi: 2 },
+      { ...t('Botas rápidas', 'hk:item-boots', 400, 0, toTiles(135), 0), agi: 4 },
+      { ...t('Botas del viento', 'hk:item-boots', 800, 0, toTiles(150), 0), agi: 8 },
     ],
   },
 };
 export const INVENTORY_SLOTS = 6; // + 1 hueco aparte solo para botas (talento)
 export const WOOD_FOR_GOLD = 64000; // la guarida vende 1 de madera por 64 000 de oro
+export const WOOD_BULK = { wood: 8, gold: 500_000 }; // I0AC: 8 de madera de golpe, algo más baratas
 
 // Objetos sueltos (no se funden). Los atributos siguen las constantes del mapa:
 // 1 de fuerza = +25 de vida · 1 de agilidad = +0.5 de armadura, +4 % de cadencia
@@ -928,4 +963,16 @@ export const BEAST = {
   respawnSec: 20,
   plunder: 0.5, // cobra la mitad del daño en oro
   leash: 9, // no se aleja más de esto de su amo si no tiene presa
+  // habilidades del H027 (las usa solo): olfato, red, antimagia y paso del viento
+  detect: { cd: 45, dur: 8, r: toTiles(1600) },
+  ensnare: { cd: 60, dur: 5, range: toTiles(800) },
+  ams: { cd: 120, dur: 10 },
+  windwalk: { cd: 30, dur: 20 },
+} as const;
+
+// Paladín (último reparador): Luz sagrada, Armadura sagrada y aura de armadura
+export const PALADIN = {
+  holyLight: { cd: 150, range: toTiles(800), base: 5, missing: 0.35 },
+  holyArmor: { cd: 30, dur: 6 },
+  aura: { armor: 3, r: toTiles(900) },
 } as const;
