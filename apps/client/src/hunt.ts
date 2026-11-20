@@ -86,6 +86,9 @@ let targeting: Ability | null = null;
 let useSlot = -1; // consumible que se usa sobre un punto
 let selected = 0; // edificio propio seleccionado
 let inspect = 0; // unidad que estás mirando (clic sobre ella): vida, equipo...
+let group: number[] = []; // varias unidades tuyas seleccionadas (recuadro, doble clic)
+const boxSel = { on: false, moved: false, sx: 0, sy: 0, ex: 0, ey: 0 };
+let rosterClick = { kind: '', at: 0, idx: 0 };
 let shopOpen = false;
 let zoom = 1;
 let follow = true;
@@ -396,13 +399,37 @@ function build(): void {
       return;
     }
     const w = toWorld(e.clientX, e.clientY);
+    // izquierdo sin nada que colocar/apuntar: se decide al soltar (clic o recuadro)
+    if (e.button === 0 && !placing && !targeting && useSlot < 0) {
+      Object.assign(boxSel, { on: true, moved: false, sx: e.clientX, sy: e.clientY, ex: e.clientX, ey: e.clientY });
+      canvas.setPointerCapture(e.pointerId);
+      return;
+    }
     onWorldClick(w.x, w.y, e.button === 2);
   });
   canvas.addEventListener('pointermove', (e) => {
-    if (e.pointerType === 'touch') touchMove(e);
+    if (e.pointerType === 'touch') {
+      touchMove(e);
+      return;
+    }
+    if (boxSel.on) {
+      boxSel.ex = e.clientX;
+      boxSel.ey = e.clientY;
+      if (Math.hypot(boxSel.ex - boxSel.sx, boxSel.ey - boxSel.sy) > 6) boxSel.moved = true;
+    }
   });
   canvas.addEventListener('pointerup', (e) => {
-    if (e.pointerType === 'touch') touchUp(e);
+    if (e.pointerType === 'touch') {
+      touchUp(e);
+      return;
+    }
+    if (!boxSel.on || e.button !== 0) return;
+    boxSel.on = false;
+    if (boxSel.moved) selectBox();
+    else {
+      const w = toWorld(e.clientX, e.clientY);
+      onWorldClick(w.x, w.y, false);
+    }
   });
   canvas.addEventListener('pointercancel', (e) => {
     if (e.pointerType === 'touch') {
@@ -741,6 +768,18 @@ function onWorldClick(x: number, y: number, right: boolean): void {
     }
     // tu personaje no se mueve con el clic (WASD); el clic derecho manda a la
     // unidad o torre que tengas seleccionada
+    if (group.length) {
+      // a varias a la vez: si apuntas a algo, todas a eso; si es suelo, repartidas
+      const units = group.map((id) => cur!.snap.units.find((o) => o[0] === id)).filter((o): o is HuntSnapUnit => !!o);
+      const onSomething = !!unitAt(x, y) || !!buildingAt(x, y) || map.tiles[Math.floor(y) * map.w + Math.floor(x)] === TILE_TREE;
+      units.forEach((u, i) => {
+        const ring = Math.ceil(Math.sqrt(i + 1) - 1);
+        const ang = i * 2.4;
+        const off = onSomething || i === 0 ? 0 : 0.7 * (ring + 0.6);
+        commandUnit(u, x + Math.cos(ang) * off, y + Math.sin(ang) * off);
+      });
+      return;
+    }
     const iu = inspect ? cur.snap.units.find((o) => o[0] === inspect) : undefined;
     if (iu && iu[2] === meIdx() && COMMANDABLE.includes(UNIT_KIND_ORDER[iu[1]])) {
       commandUnit(iu, x, y);
@@ -782,19 +821,18 @@ function onWorldClick(x: number, y: number, right: boolean): void {
   }
   // ¿clic sobre un edificio propio? → seleccionar
   const own = myBuildings().find((o) => cx >= o[3] && cx < o[3] + bSize(o) && cy >= o[4] && cy < o[4] + bSize(o));
-  // ¿clic sobre una unidad? → inspeccionarla (vida, nivel, objetos del cazador...)
-  let best: HuntSnapUnit | undefined;
-  let bestD = 0.75;
-  for (const u of cur.snap.units) {
-    const p = disp.get(u[0]) ?? { x: u[3], y: u[4] };
-    // el dibujo está por encima de los pies: se acepta pinchar en el cuerpo
-    const d = Math.min(Math.hypot(p.x - x, p.y - y), Math.hypot(p.x - x, p.y - 0.5 - y));
-    if (d < bestD) {
-      bestD = d;
-      best = u;
-    }
-  }
+  // ¿clic sobre una unidad? → seleccionarla. Mayús+clic suma/quita de la selección
+  const best = unitAt(x, y);
   if (best) {
+    const mineCmd = best[2] === meIdx() && COMMANDABLE.includes(UNIT_KIND_ORDER[best[1]]);
+    if (keys.has('Shift') && mineCmd) {
+      const set = new Set(group.length ? group : inspect ? [inspect] : []);
+      if (set.has(best[0])) set.delete(best[0]);
+      else set.add(best[0]);
+      setGroup([...set]);
+      return;
+    }
+    group = [];
     inspect = best[0];
     selected = 0;
     return;
@@ -802,10 +840,81 @@ function onWorldClick(x: number, y: number, right: boolean): void {
   if (own && m.side === 'elf') {
     selected = own[0];
     inspect = 0;
+    group = [];
     return;
   }
   selected = 0;
   inspect = 0;
+  group = [];
+}
+
+// altura dibujada (casillas) de cada tipo: la zona de clic es todo el dibujo
+function unitHeight(kind: UnitKind): number {
+  if (UNIT_SHEETS[kind] && unitAtlasOk) return SPRITE_TILES[kind] ?? 1.3;
+  if (isSoldierKind(kind)) return SOLDIERS[kind].size;
+  return kind === 'hunter' ? 2 : kind === 'wolf' ? 1.45 : kind === 'repairer' || kind === 'lumberjack' ? 0.85 : 1.2;
+}
+// la unidad bajo el punto: si hay varias, la más pequeña (un leñador delante del troll)
+function unitAt(x: number, y: number): HuntSnapUnit | undefined {
+  if (!cur) return undefined;
+  let best: HuntSnapUnit | undefined;
+  let bestScore = Infinity;
+  for (const u of cur.snap.units) {
+    const p = disp.get(u[0]) ?? { x: u[3], y: u[4] };
+    const h = unitHeight(UNIT_KIND_ORDER[u[1]]);
+    const hw = Math.max(0.42, h * 0.32);
+    const foot = p.y + 0.36;
+    if (x < p.x - hw || x > p.x + hw || y < foot - h * 0.95 || y > foot + 0.15) continue;
+    const score = h * 10 + Math.abs(x - p.x) + Math.abs(y - (foot - h / 2)) * 0.5;
+    if (score < bestScore) {
+      bestScore = score;
+      best = u;
+    }
+  }
+  return best;
+}
+function buildingAt(x: number, y: number): HuntSnapBuilding | undefined {
+  if (!cur) return undefined;
+  const cx = Math.floor(x);
+  const cy = Math.floor(y);
+  return cur.snap.buildings.find((o) => cx >= o[3] && cx < o[3] + bSize(o) && cy >= o[4] && cy < o[4] + bSize(o));
+}
+function setGroup(ids: number[]): void {
+  if (ids.length === 1) {
+    group = [];
+    inspect = ids[0];
+  } else {
+    group = ids;
+    inspect = 0;
+  }
+  selected = 0;
+}
+// recuadro: todas tus unidades mandables que queden dentro
+function selectBox(): void {
+  if (!cur) return;
+  const a = toWorld(boxSel.sx, boxSel.sy);
+  const b = toWorld(boxSel.ex, boxSel.ey);
+  const [x0, x1] = [Math.min(a.x, b.x), Math.max(a.x, b.x)];
+  const [y0, y1] = [Math.min(a.y, b.y), Math.max(a.y, b.y)];
+  const ids = cur.snap.units
+    .filter((u) => u[2] === meIdx() && COMMANDABLE.includes(UNIT_KIND_ORDER[u[1]]))
+    .filter((u) => {
+      const p = disp.get(u[0]) ?? { x: u[3], y: u[4] };
+      return p.x >= x0 && p.x <= x1 && p.y >= y0 - 0.5 && p.y <= y1 + 0.3;
+    })
+    .map((u) => u[0]);
+  if (ids.length) setGroup(ids);
+}
+// tus unidades mandables, por tipo (barra «Tus unidades» y Tab)
+function myCommandables(): HuntSnapUnit[] {
+  if (!cur) return [];
+  return cur.snap.units.filter((u) => u[2] === meIdx() && COMMANDABLE.includes(UNIT_KIND_ORDER[u[1]]));
+}
+function focusUnit(u: HuntSnapUnit): void {
+  const p = disp.get(u[0]) ?? { x: u[3], y: u[4] };
+  follow = false;
+  cam.x = p.x;
+  cam.y = p.y;
 }
 
 // unidades propias que se mandan con el ratón (tu personaje va con WASD)
@@ -992,7 +1101,18 @@ function onKey(e: KeyboardEvent): void {
     openChat();
     return;
   }
+  if (k === 'tab') {
+    e.preventDefault();
+    const list = myCommandables();
+    if (!list.length) return;
+    const i = list.findIndex((u) => u[0] === inspect);
+    const nxt = list[(i + 1) % list.length];
+    setGroup([nxt[0]]);
+    focusUnit(nxt);
+    return;
+  }
   if (k === 'escape') {
+    group = [];
     placing = null;
     targeting = null;
     useSlot = -1;
@@ -1081,6 +1201,21 @@ function onUiClick(e: Event): void {
     case 'demolish':
       send({ k: 'demolish', id: selected });
       break;
+    case 'roster': {
+      const list = myCommandables().filter((u) => UNIT_KIND_ORDER[u[1]] === v);
+      if (!list.length) break;
+      const nowT = performance.now();
+      if (rosterClick.kind === v && nowT - rosterClick.at < 350) {
+        setGroup(list.map((u) => u[0]));
+        rosterClick = { kind: '', at: 0, idx: 0 };
+        break;
+      }
+      const idx = rosterClick.kind === v ? (rosterClick.idx + 1) % list.length : 0;
+      rosterClick = { kind: v, at: nowT, idx };
+      setGroup([list[idx][0]]);
+      focusUnit(list[idx]);
+      break;
+    }
     case 'army':
       send({ k: 'army', id: selected, kind: v as SoldierKind });
       break;
@@ -1175,6 +1310,7 @@ function onUiClick(e: Event): void {
       if (v === 'panel') {
         selected = 0;
         inspect = 0;
+        group = [];
       }
       if (v === 'shop') shopOpen = false;
       if (v === 'modal') root.querySelector<HTMLElement>('#hk-modal')!.hidden = true;
@@ -1567,6 +1703,23 @@ function inspectHtml(u: HuntSnapUnit): string {
   return `<div class="hk-panel-head"><span class="ic big">${icon(UNIT_ICON[kind])}</span><div><b>${title}</b><small>${sub}</small></div><button data-act="close" data-v="panel">✕</button></div>${lines.join('')}`;
 }
 
+// «Tus unidades»: un botón por tipo con su cantidad. Clic = la siguiente de ese
+// tipo (y la cámara va a ella); doble clic = todas las de ese tipo
+function rosterHtml(): string {
+  const list = myCommandables();
+  if (!list.length) return '';
+  const byKind = new Map<UnitKind, number>();
+  for (const u of list) byKind.set(UNIT_KIND_ORDER[u[1]], (byKind.get(UNIT_KIND_ORDER[u[1]]) ?? 0) + 1);
+  const sel = new Set(group.length ? group : inspect ? [inspect] : []);
+  const btns = [...byKind]
+    .map(([k, n]) => {
+      const on = list.some((u) => UNIT_KIND_ORDER[u[1]] === k && sel.has(u[0]));
+      return `<button class="hk-btn ab roster${on ? ' on' : ''}" data-act="roster" data-v="${k}" data-tip="${esc(`<b>${KIND_NAME[k]}</b> ×${n}<br>Clic: el siguiente · doble clic: todos`)}"><span class="ic">${icon(UNIT_ICON[k])}</span><span class="nb">${n}</span></button>`;
+    })
+    .join('');
+  return `<div class="hk-group"><div class="hk-label">Tus unidades <kbd>Tab</kbd></div><div class="hk-row">${btns}</div></div>`;
+}
+
 function syncCard(): void {
   const m = me();
   const s = cur!.snap;
@@ -1622,13 +1775,13 @@ function syncCard(): void {
         : '';
     card = `<div class="hk-group"><div class="hk-label">Construir</div><div class="hk-row">${builds}</div></div>
       <div class="hk-group"><div class="hk-label">Habilidades</div><div class="hk-row">${abilities}${book}${mage}</div></div>
-      <div class="hk-group"><div class="hk-label">Mercado</div>${market}</div>`;
+      <div class="hk-group"><div class="hk-label">Mercado</div>${market}</div>${rosterHtml()}`;
   } else if (m.side === 'hunter') {
     const inv = invHtml(m.inv, true);
     const bootsSlot = bootsHtml(m.boots, true);
     card = `<div class="hk-group"><div class="hk-label">Habilidades</div><div class="hk-row">${abilities}</div></div>
       <div class="hk-group"><div class="hk-label">Inventario</div><div class="hk-row inv">${inv}<span class="hk-sep"></span>${bootsSlot}</div></div>
-      <div class="hk-group"><div class="hk-label">Guarida</div><div class="hk-row"><button class="hk-btn ab shopbtn${shopOpen ? ' on' : ''}" data-act="shop" data-tip="Tienda de la guarida (G). Solo se compra estando cerca."><span class="ic">${icon('hk:shop')}</span><kbd>G</kbd>${m.nearShop ? '<span class="dot"></span>' : ''}</button>${m.form === 'hunter' ? `<button class="hk-btn ab${m.allowWolves ? ' on' : ''}" data-act="wolves" data-v="${m.allowWolves ? 'off' : 'on'}" data-tip="${esc(m.allowWolves ? '<b>Admites lobos</b><br>Los colonos que caigan pueden unirse a ti como lobos. Clic para no admitirlos.' : '<b>No admites lobos</b><br>Los caídos solo pueden volver como ángeles. Clic para admitirlos.')}"><span class="ic">${icon('hk:wolf')}</span><span class="ct">${m.allowWolves ? 'sí' : 'no'}</span></button>` : ''}</div></div>`;
+      <div class="hk-group"><div class="hk-label">Guarida</div><div class="hk-row"><button class="hk-btn ab shopbtn${shopOpen ? ' on' : ''}" data-act="shop" data-tip="Tienda de la guarida (G). Solo se compra estando cerca."><span class="ic">${icon('hk:shop')}</span><kbd>G</kbd>${m.nearShop ? '<span class="dot"></span>' : ''}</button>${m.form === 'hunter' ? `<button class="hk-btn ab${m.allowWolves ? ' on' : ''}" data-act="wolves" data-v="${m.allowWolves ? 'off' : 'on'}" data-tip="${esc(m.allowWolves ? '<b>Admites lobos</b><br>Los colonos que caigan pueden unirse a ti como lobos. Clic para no admitirlos.' : '<b>No admites lobos</b><br>Los caídos solo pueden volver como ángeles. Clic para admitirlos.')}"><span class="ic">${icon('hk:wolf')}</span><span class="ct">${m.allowWolves ? 'sí' : 'no'}</span></button>` : ''}</div></div>${rosterHtml()}`;
   } else if (m.form === 'angel') {
     card = `<div class="hk-group"><div class="hk-label">Ángel · ayuda a los colonos</div><div class="hk-row">${abilities}</div></div>
       <div class="hk-hint">Señala un edificio de los colonos y pulsa R para repararlo. Roba oro junto a la guarida del cazador.</div>`;
@@ -1643,6 +1796,24 @@ function syncPanel(): void {
   const m = me();
   if (!b || !m || cur!.snap.over || m.form !== 'elf') {
     if (selected && !b) selected = 0;
+    if (group.length && cur) {
+      group = group.filter((id) => cur!.snap.units.some((o) => o[0] === id));
+      if (group.length > 1) {
+        const byKind = new Map<UnitKind, number>();
+        for (const id of group) {
+          const u = cur.snap.units.find((o) => o[0] === id)!;
+          byKind.set(UNIT_KIND_ORDER[u[1]], (byKind.get(UNIT_KIND_ORDER[u[1]]) ?? 0) + 1);
+        }
+        const chips = [...byKind].map(([k, n]) => `<span class="hk-gchip">${icon(UNIT_ICON[k])}<b>${n}</b> ${esc(KIND_NAME[k])}</span>`).join('');
+        setHtml(
+          'hk-panel',
+          `<div class="hk-panel-head"><span class="ic big">${icon('hk:upgrade')}</span><div><b>${group.length} unidades</b><small>seleccionadas</small></div><button data-act="close" data-v="panel">✕</button></div><div class="hk-gchips">${chips}</div><div class="hk-hint">Clic derecho: van todas (a reparar, talar, atacar o a un punto, repartidas). Mayús+clic suma o quita una.</div>`,
+        );
+        panel.hidden = false;
+        return;
+      }
+      if (group.length === 1) setGroup(group);
+    }
     const iu = inspect && cur && !cur.snap.over ? cur.snap.units.find((o) => o[0] === inspect) : undefined;
     if (inspect && !iu) inspect = 0;
     if (iu) {
@@ -2195,6 +2366,13 @@ function drawUnit(u: HuntSnapUnit, x: number, y: number, now: number, moving: bo
     }
     g.stroke();
   }
+  if (group.includes(u[0])) {
+    g.strokeStyle = '#9be28a';
+    g.lineWidth = 2;
+    g.beginPath();
+    g.ellipse(x, footY, size * 0.46, size * 0.16, 0, 0, Math.PI * 2);
+    g.stroke();
+  }
   if (u[0] === inspect) {
     g.strokeStyle = '#ffcd45';
     g.lineWidth = 2;
@@ -2505,6 +2683,41 @@ function frame(now: number): void {
   drawables.sort((a, b) => a.y - b.y);
   for (const d of drawables) d.draw();
 
+  // lo que hay bajo el ratón se ilumina (así sabes qué vas a seleccionar)
+  if (mouse.in && !isTouch && !placing && !targeting && useSlot < 0 && !boxSel.moved) {
+    const hu = unitAt(mouse.x, mouse.y);
+    const hb = hu ? undefined : buildingAt(mouse.x, mouse.y);
+    canvas.style.cursor = hu || hb ? 'pointer' : 'crosshair';
+    g.save();
+    g.strokeStyle = 'rgba(255, 255, 255, 0.75)';
+    g.lineWidth = 2;
+    g.setLineDash([4, 3]);
+    if (hu) {
+      const p = pos.get(hu[0]) ?? { x: hu[3], y: hu[4] };
+      const h = unitHeight(UNIT_KIND_ORDER[hu[1]]);
+      g.beginPath();
+      g.ellipse(X(p.x), Y(p.y) + s * 0.36, h * s * 0.36, h * s * 0.13, 0, 0, Math.PI * 2);
+      g.stroke();
+    } else if (hb) {
+      g.strokeRect(X(hb[3]) + 2, Y(hb[4]) + 2, bSize(hb) * s - 4, bSize(hb) * s - 4);
+    }
+    g.restore();
+  }
+  if (boxSel.on && boxSel.moved) {
+    const r = canvas.getBoundingClientRect();
+    const dpr2 = window.devicePixelRatio || 1;
+    const x0 = (Math.min(boxSel.sx, boxSel.ex) - r.left) * dpr2;
+    const y0 = (Math.min(boxSel.sy, boxSel.ey) - r.top) * dpr2;
+    const w0 = Math.abs(boxSel.ex - boxSel.sx) * dpr2;
+    const h0 = Math.abs(boxSel.ey - boxSel.sy) * dpr2;
+    g.save();
+    g.fillStyle = 'rgba(155, 226, 138, 0.12)';
+    g.strokeStyle = 'rgba(155, 226, 138, 0.9)';
+    g.lineWidth = 1.5;
+    g.fillRect(x0, y0, w0, h0);
+    g.strokeRect(x0, y0, w0, h0);
+    g.restore();
+  }
   // ayudas: colocación, objetivo de habilidad, alcance de la torre seleccionada
   const m = snap.me;
   if (m && mouse.in && (placing || targeting || useSlot >= 0)) {
