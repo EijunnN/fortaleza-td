@@ -140,7 +140,49 @@ console.log('economía, requisitos y murallas');
     wall.hp = 100;
     run(st, sec(25));
     assert(wall.hp > 120, `el reparador sube la muralla (${Math.round(wall.hp)} de 360)`);
+    // mover un obrero con el ratón y luego mandarlo a reparar algo concreto
+    const rep = st.units.find((u) => u.kind === 'repairer' && u.alive)!;
+    for (const b of st.buildings) b.hp = b.maxHp; // nada que reparar: se queda donde lo mandas
+    run(st, sec(4), [{ playerId: 'p2', cmd: { k: 'worker', id: rep.id, x: inner.x + 0.5, y: inner.y + 0.5 } }]);
+    const px0 = rep.x;
+    const py0 = rep.y;
+    run(st, sec(3));
+    assert(Math.hypot(rep.x - inner.x - 0.5, rep.y - inner.y - 0.5) < 2.3 && rep.x === px0 && rep.y === py0, 'el reparador va a donde lo mandas y se queda ahí');
+    // vender: devuelve la mitad
+    const g0 = ana.gold;
+    run(st, 1, [{ playerId: 'p2', cmd: { k: 'sellunit', id: rep.id } }]);
+    assert(!rep.alive && ana.gold - g0 === 16, `vender un aprendiz devuelve la mitad (${ana.gold - g0} de 32)`);
   }
+  // leñador en una base CERRADA: tala un árbol de dentro (antes se atascaba
+  // yendo al árbol más cercano en línea recta, que estaba fuera de la muralla)
+  ana.gold += 100000;
+  const shop2 = st.buildings.find((b) => b.type === 'workshop')!;
+  run(st, 1, [{ playerId: 'p2', cmd: { k: 'upgrade', id: shop2.id } }]);
+  const spots: [number, number][] = [];
+  for (let y = plot.y + 1; y < plot.y + plot.h - 2; y++)
+    for (let x = plot.x + 1; x < plot.x + plot.w - 2; x++)
+      if ([0, 1].every((a2) => [0, 1].every((b2) => map.tiles[(y + b2) * map.w + x + a2] === 0 && map.plotOf[(y + b2) * map.w + x + a2] === plot.id)) && !st.buildings.some((b) => Math.abs(b.cx - x) < 3 && Math.abs(b.cy - y) < 3)) spots.push([x, y]);
+  const [ex, ey] = spots[Math.floor(spots.length / 2)];
+  run(st, sec(15), [{ playerId: 'p2', cmd: { k: 'build', type: 'elftree', cx: ex, cy: ey } }]);
+  const etree = st.buildings.find((b) => b.type === 'elftree');
+  assert(!!etree, 'construye el árbol élfico');
+  if (etree) {
+    run(st, 1, [{ playerId: 'p2', cmd: { k: 'train', id: etree.id, unit: 'lumberjack', tier: 0 } }]);
+    const lj = st.units.find((u) => u.kind === 'lumberjack' && u.alive)!;
+    const w0 = ana.wood;
+    run(st, sec(30));
+    assert(ana.wood > w0 + 1 && map.plotOf[Math.floor(lj.y) * map.w + Math.floor(lj.x)] === plot.id, `el leñador tala dentro de la base cerrada (+${(ana.wood - w0).toFixed(1)} de madera en 30 s)`);
+    // venderlo
+    const t0 = lj.tree;
+    run(st, 1, [{ playerId: 'p2', cmd: { k: 'sellunit', id: lj.id } }]);
+    assert(!lj.alive && !st.treeTaken.has(t0), 'vender el leñador libera su árbol');
+  }
+  // vender un edificio devuelve la mitad de lo invertido
+  const tw = st.buildings.find((b) => b.type === 'workshop')!;
+  const inv = tw.investGold;
+  const g1 = ana.gold;
+  run(st, 1, [{ playerId: 'p2', cmd: { k: 'demolish', id: tw.id } }]);
+  assert(!st.buildings.includes(tw) && ana.gold - g1 === Math.floor(inv / 2), `vender el taller devuelve la mitad (${ana.gold - g1} de ${inv})`);
 }
 
 console.log('torres, golpes y papeles al morir');
@@ -343,6 +385,17 @@ console.log('WASD (steer)');
   run(st, 1, [{ playerId: 'p2', cmd: { k: 'steer', dx: -1, dy: 0 } }]);
   run(st, 1, [{ playerId: 'p2', cmd: { k: 'build', type: 'wall', cx: door.x, cy: door.y } }]);
   assert(elf.sx === 0 && elf.sy === 0, 'una orden de construir suelta la dirección');
+  // entrar por una puerta de 1 casilla yendo descentrado: la esquina te guía
+  {
+    const st3 = createHunt(4, roster, 'p1');
+    const e3 = mainUnit(st3, 'p2')!;
+    const o = [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dy]) => ({ dx, dy })).find(({ dx, dy }) => map.tiles[(door.y + dy) * map.w + door.x + dx] === 0 && map.plotOf[(door.y + dy) * map.w + door.x + dx] !== plot.id)!;
+    // fuera, a 2 casillas de la puerta, desplazado 0,3 de lado
+    e3.x = door.x + 0.5 + o.dx * 2 + (o.dy ? 0.3 : 0);
+    e3.y = door.y + 0.5 + o.dy * 2 + (o.dx ? 0.3 : 0);
+    run(st3, sec(2), [{ playerId: 'p2', cmd: { k: 'steer', dx: -o.dx, dy: -o.dy } }]);
+    assert(map.plotOf[Math.floor(e3.y) * map.w + Math.floor(e3.x)] === plot.id, `entra por la puerta de 1 casilla aunque vaya descentrado (${e3.x.toFixed(2)}, ${e3.y.toFixed(2)})`);
+  }
   // el cazador con WASD golpea lo que tiene pegado
   const st2 = createHunt(3, roster, 'p1');
   run(st2, sec(PHASE.headStart) + 2);
@@ -361,6 +414,10 @@ console.log('WASD (steer)');
     const hp0 = wall.hp;
     run(st2, sec(4), [{ playerId: 'p1', cmd: { k: 'steer', dx: -o.dx, dy: -o.dy } }]);
     assert(wall.hp < hp0, `el cazador empuja con WASD contra la muralla y la golpea (${hp0} → ${wall.hp.toFixed(0)})`);
+    // pegado a la muralla y empujando: nunca la atraviesa (ni en el servidor)
+    const inside = () => map.plotOf[Math.floor(hunter.y) * map.w + Math.floor(hunter.x)] === plot.id;
+    run(st2, sec(3), [{ playerId: 'p1', cmd: { k: 'steer', dx: -o.dx, dy: -o.dy } }]);
+    assert(!inside(), 'empujando contra la muralla el cazador no entra en la base');
     let acting = 0;
     for (let i = 0; i < sec(3); i++) {
       run(st2, 1);

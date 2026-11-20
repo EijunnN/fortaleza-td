@@ -124,6 +124,8 @@ export interface HuntUnit {
   sx: number; // dirección de WASD (-1, 0, 1); 0,0 = sin teclas
   sy: number;
   claimAt: number; // último tick en que el cliente corrigió su posición (WASD)
+  anchorX: number; // obrero movido con el ratón: trabaja alrededor de aquí (−1 = donde sea)
+  anchorY: number;
   actUntil: number; // golpeando o reparando hasta este tick (para la animación)
   actX: number; // hacia dónde (centro del objetivo)
   actY: number;
@@ -178,6 +180,7 @@ export interface HuntBuilding {
   eyeUntil: number; // vista por el Ojo: no se puede derribar
   investGold: number;
   investWood: number;
+  focus?: number; // torre: unidad a la que dispara primero (orden del jugador)
   retro: number; // remodelaciones (0..5)
   forceUntil: number; // Plena fuerza: torres y minas al doble
   packedUntil: number; // casa empaquetada
@@ -217,6 +220,7 @@ export interface HuntShop {
 export interface HuntState {
   tick: number;
   rng: number;
+  gameId: number; // distinto en cada partida (el cliente lo usa para no arrastrar la anterior)
   nextId: number;
   players: HuntPlayer[];
   units: HuntUnit[];
@@ -238,6 +242,11 @@ export interface HuntState {
 export type HuntCommand =
   | { k: 'move'; x: number; y: number }
   | { k: 'steer'; dx: number; dy: number; x?: number; y?: number }
+  // obreros con el ratón: a un punto, a reparar un edificio o a talar un árbol
+  | { k: 'worker'; id: number; x?: number; y?: number; target?: number; tree?: number; follow?: boolean }
+  | { k: 'sellunit'; id: number }
+  // torre: disparar primero a esta unidad (0 = la más cercana, como siempre)
+  | { k: 'focus'; id: number; target: number }
   | { k: 'attack'; target: number }
   | { k: 'repair'; target: number }
   | { k: 'stop' }
@@ -317,6 +326,8 @@ function newUnit(st: HuntState, owner: string, kind: UnitKind, x: number, y: num
     sx: 0,
     sy: 0,
     claimAt: 0,
+    anchorX: -1,
+    anchorY: -1,
     actUntil: 0,
     actX: 0,
     actY: 0,
@@ -356,11 +367,15 @@ function newUnit(st: HuntState, owner: string, kind: UnitKind, x: number, y: num
   return u;
 }
 
-export function createHunt(seed: number, roster: { id: string; name: string; color: string }[], hunterId: string): HuntState {
+// `hunterIds`: uno o varios cazadores (cada jugador elige bando en el lobby)
+export function createHunt(seed: number, roster: { id: string; name: string; color: string }[], hunterIds: string | string[]): HuntState {
+  const hunters = new Set(Array.isArray(hunterIds) ? hunterIds : [hunterIds]);
+  const hunterId = [...hunters][0] ?? '';
   const map = getHuntMap();
   const st: HuntState = {
     tick: 0,
     rng: seed | 0,
+    gameId: seed | 0,
     nextId: 1,
     players: [],
     units: [],
@@ -379,9 +394,10 @@ export function createHunt(seed: number, roster: { id: string; name: string; col
     shops: [],
   };
   let slot = 0;
-  const elves = roster.filter((r) => r.id !== hunterId).length;
+  const elves = roster.filter((r) => !hunters.has(r.id)).length;
+  let hslot = 0;
   for (const r of roster) {
-    const hunter = r.id === hunterId;
+    const hunter = hunters.has(r.id);
     st.players.push({
       id: r.id,
       name: r.name,
@@ -407,7 +423,10 @@ export function createHunt(seed: number, roster: { id: string; name: string; col
       stats: { goldEarned: 0, damage: 0, built: 0, kills: 0 },
     });
     if (hunter) {
-      newUnit(st, r.id, 'hunter', map.camp.x + 0.5, map.camp.y + 2.5, HUNTER.hp);
+      // varios cazadores: en fila delante de la guarida
+      const off = hslot === 0 ? 0 : (hslot % 2 ? 1 : -1) * Math.ceil(hslot / 2);
+      newUnit(st, r.id, 'hunter', map.camp.x + 0.5 + off, map.camp.y + 2.5, HUNTER.hp);
+      hslot++;
     } else {
       const a = (slot / Math.max(1, elves)) * Math.PI * 2;
       newUnit(st, r.id, 'elf', map.camp.x + 0.5 + Math.round(Math.cos(a) * 3), map.camp.y + 0.5 + Math.round(Math.sin(a) * 3), ELF.hp);
@@ -1067,18 +1086,108 @@ function applyCommand(st: HuntState, map: HuntMap, playerId: string, cmd: HuntCo
     }
     return;
   }
+  // obreros: moverlos, mandarlos a reparar algo concreto o a un árbol
+  if (cmd.k === 'worker' || cmd.k === 'sellunit') {
+    const w = st.units.find((o) => o.id === cmd.id && o.alive && o.owner === playerId && (o.kind === 'repairer' || o.kind === 'lumberjack' || o.kind === 'beast' || o.kind === 'mage'));
+    if (!w) return;
+    const companion = w.kind === 'beast' || w.kind === 'mage';
+    if (cmd.k === 'sellunit' && companion) return;
+    const wg = huntBlockedGrid(st, map);
+    const releaseTree = () => {
+      if (w.tree >= 0 && st.treeTaken.get(w.tree) === w.id) st.treeTaken.delete(w.tree);
+      w.tree = -1;
+    };
+    if (cmd.k === 'sellunit') {
+      const def = (w.kind === 'repairer' ? REPAIRERS : LUMBERJACKS)[w.tier];
+      releaseTree();
+      w.alive = false;
+      p.gold = Math.min(GOLD_CAP, p.gold + Math.floor(def.gold / 2));
+            ev.push({ e: 'bought', priv: playerId, text: `Vendido: ${def.name} (+${Math.floor(def.gold / 2)} de oro)` });
+      return;
+    }
+    if (companion) {
+      if (cmd.follow) {
+        w.anchorX = -1;
+        w.anchorY = -1;
+        w.order = { k: 'idle' };
+        w.path = [];
+        return;
+      }
+      if (num(cmd.target)) {
+        const mySide = sideOfOwner(st, w.owner);
+        const tb = w.kind === 'beast' ? st.buildings.find((o) => o.id === cmd.target && sideOfOwner(st, o.owner) !== mySide) : undefined;
+        const tu = st.units.find((o) => o.id === cmd.target && o.alive && sideOfOwner(st, o.owner) !== mySide);
+        if (!tb && !tu) return;
+        w.order = { k: 'attack', target: cmd.target };
+        w.path = [];
+        return;
+      }
+      if (!num(cmd.x) || !num(cmd.y) || cmd.x < 0 || cmd.y < 0 || cmd.x >= map.w || cmd.y >= map.h) return;
+      w.anchorX = cmd.x;
+      w.anchorY = cmd.y;
+      w.order = { k: 'move' };
+      routeTo(st, map, wg, w, pointGoal(cmd.x, cmd.y), { x: cmd.x, y: cmd.y });
+      return;
+    }
+    if (num(cmd.target)) {
+      const b = st.buildings.find((o) => o.id === cmd.target && sideOfOwner(st, o.owner) === 'elf');
+      if (!b || w.kind !== 'repairer') return;
+      w.work = b.id;
+      w.anchorX = b.cx + b.size / 2;
+      w.anchorY = b.cy + b.size / 2;
+      w.order = { k: 'idle' };
+      routeTo(st, map, wg, w, buildingGoal(b));
+      return;
+    }
+    if (num(cmd.tree)) {
+      if (w.kind !== 'lumberjack' || !isTreeAlive(st, map, cmd.tree)) return reject(ev, playerId, 'Ahí no hay un árbol vivo');
+      const holder = st.treeTaken.get(cmd.tree);
+      if (holder !== undefined && holder !== w.id) {
+        const other = st.units.find((o) => o.id === holder && o.alive);
+        if (other && other.owner !== playerId) return reject(ev, playerId, 'Ese árbol ya lo tala otro');
+        if (other) other.tree = -1; // uno tuyo: le cede el árbol
+      }
+      releaseTree();
+      w.tree = cmd.tree;
+      st.treeTaken.set(cmd.tree, w.id);
+      w.order = { k: 'idle' };
+      const tx = cmd.tree % map.w;
+      routeTo(st, map, wg, w, { x: tx, y: (cmd.tree - tx) / map.w, w: 1, h: 1, near: true });
+      return;
+    }
+    if (!num(cmd.x) || !num(cmd.y) || cmd.x < 0 || cmd.y < 0 || cmd.x >= map.w || cmd.y >= map.h) return;
+    releaseTree();
+    w.work = 0;
+    w.anchorX = cmd.x;
+    w.anchorY = cmd.y;
+    w.order = { k: 'move' };
+    routeTo(st, map, wg, w, pointGoal(cmd.x, cmd.y), { x: cmd.x, y: cmd.y });
+    return;
+  }
+  if (cmd.k === 'focus') {
+    const b = st.buildings.find((o) => o.id === cmd.id && o.owner === playerId && o.type === 'tower');
+    if (!b || !num(cmd.target)) return;
+    b.focus = cmd.target;
+    return;
+  }
   if (cmd.k === 'upgrade' || cmd.k === 'demolish' || cmd.k === 'train') {
     const b = st.buildings.find((o) => o.id === cmd.id && o.owner === playerId);
     if (!b) return;
     if (cmd.k === 'upgrade') return upgradeBuilding(st, p, b, cmd.branch, ev);
     if (cmd.k === 'demolish') {
-      if (b.hp < b.maxHp * 0.95) return reject(ev, playerId, 'Solo puedes derribarlo con la vida casi entera');
-      if (b.eyeUntil > st.tick) return reject(ev, playerId, 'El Ojo del cazador lo vigila: ahora no se puede derribar');
+      if (b.hp < b.maxHp * 0.95) return reject(ev, playerId, 'Solo puedes venderlo con la vida casi entera');
+      if (b.eyeUntil > st.tick) return reject(ev, playerId, 'El Ojo del cazador lo vigila: ahora no se puede vender');
       const hunterNear = st.units.some(
         (u) => u.alive && (u.kind === 'hunter' || u.kind === 'wolf') && distToRect(u.x, u.y, b.cx, b.cy, b.size, b.size) <= 9.4,
       );
-      if (hunterNear) return reject(ev, playerId, 'Con el cazador cerca no se puede derribar');
+      if (hunterNear) return reject(ev, playerId, 'Con el cazador cerca no se puede vender');
+      // vender: se recupera la mitad de lo invertido
+      const g2 = Math.floor(b.investGold / 2);
+      const w2 = Math.floor(b.investWood / 2);
       razeBuilding(st, b, ev, false);
+      p.gold = Math.min(GOLD_CAP, p.gold + g2);
+      p.wood += w2;
+      ev.push({ e: 'bought', priv: playerId, text: `Vendido: +${g2} de oro${w2 ? ` y +${w2} de madera` : ''}` });
       return;
     }
     return trainWorker(st, map, p, b, cmd.unit, cmd.tier, ev);
@@ -1685,16 +1794,56 @@ function freeAt(map: HuntMap, g: Uint8Array, x: number, y: number): boolean {
   return true;
 }
 
-// movimiento directo con WASD: avanza en la dirección y se desliza por las paredes
+// cuánto se mete un círculo de radio STEER_R en casillas bloqueadas (0 = libre)
+function overlapAt(map: HuntMap, g: Uint8Array, x: number, y: number): number {
+  let o = 0;
+  for (let cy = Math.floor(y - STEER_R); cy <= Math.floor(y + STEER_R); cy++)
+    for (let cx = Math.floor(x - STEER_R); cx <= Math.floor(x + STEER_R); cx++) {
+      if (cx >= 0 && cy >= 0 && cx < map.w && cy < map.h && !g[cy * map.w + cx]) continue;
+      const dx = Math.max(cx - x, 0, x - (cx + 1));
+      const dy = Math.max(cy - y, 0, y - (cy + 1));
+      o += Math.max(0, STEER_R - Math.hypot(dx, dy));
+    }
+  return o;
+}
+
+// Movimiento directo con WASD: avanza en la dirección y se desliza por las
+// paredes. Si roza una esquina (p. ej. al entrar por una puerta de 1 casilla
+// sin ir perfectamente centrado), se le empuja de lado hacia el hueco, como en
+// cualquier juego de acción. Si por lo que sea ya está algo metido en algo
+// bloqueado, solo puede moverse a donde esté MENOS metido (nunca atravesar).
 export function steerStep(map: HuntMap, g: Uint8Array, x: number, y: number, sx: number, sy: number, dist: number): { x: number; y: number } {
   const k = sx && sy ? Math.SQRT1_2 : 1;
   const nx = x + sx * k * dist;
   const ny = y + sy * k * dist;
-  // si ya estaba metido en un bloqueado (p. ej. construyeron encima), dejarle salir
-  const stuck = !freeAt(map, g, x, y);
-  if (stuck || freeAt(map, g, nx, ny)) return { x: nx, y: ny };
-  if (sx && freeAt(map, g, nx, y)) return { x: nx, y };
-  if (sy && freeAt(map, g, x, ny)) return { x, y: ny };
+  const o0 = overlapAt(map, g, x, y);
+  if (o0 > 0) {
+    // atascado: aceptar el paso solo si reduce el solape (sale), probando ejes
+    for (const [tx, ty] of [[nx, ny], [nx, y], [x, ny]] as const) if (overlapAt(map, g, tx, ty) < o0 - 1e-6) return { x: tx, y: ty };
+    return { x, y };
+  }
+  if (freeAt(map, g, nx, ny)) return { x: nx, y: ny };
+  if (sx && sy) {
+    // diagonal contra una pared: deslizar por el eje que quede libre
+    if (freeAt(map, g, nx, y)) return { x: nx, y };
+    if (freeAt(map, g, x, ny)) return { x, y: ny };
+  } else {
+    // recto contra una esquina: buscar el hueco a cada lado (hasta media casilla)
+    // y empujar hacia él, sin dejar de avanzar si ya cabe
+    for (const d of [0.1, 0.2, 0.3, 0.4, 0.5]) {
+      for (const side of [1, -1]) {
+        const px = sy ? x + side * d : x;
+        const py = sx ? y + side * d : y;
+        if (!freeAt(map, g, px, py)) continue;
+        if (!freeAt(map, g, px + sx * dist, py + sy * dist)) continue;
+        // empuje lateral limitado a la distancia del paso
+        const push = Math.min(d, dist);
+        const ax = sy ? x + side * push : x;
+        const ay = sx ? y + side * push : y;
+        if (freeAt(map, g, ax, ay)) return { x: ax, y: ay };
+      }
+    }
+  }
   // pegado a la pared: acercarse lo que quepa
   for (let f = 0.75; f > 0.05; f -= 0.25) {
     const fx = x + sx * k * dist * f;
@@ -1815,14 +1964,31 @@ function stepCompanion(st: HuntState, map: HuntMap, g: Uint8Array, u: HuntUnit, 
   if (!p) return;
   if (u.atkCd > 0) u.atkCd -= 1;
   if (u.stunUntil > st.tick) return;
+  // movido con el ratón: primero llega (sin distraerse)
+  if (u.order.k === 'move') {
+    if (u.path.length > 0) {
+      moveUnit(st, map, g, u);
+      return;
+    }
+    u.order = { k: 'idle' };
+  }
   const master = mainUnit(st, u.owner);
+  // su «casa»: el punto donde lo dejaste o, si no, su amo
+  const home = u.anchorX >= 0 ? { x: u.anchorX, y: u.anchorY } : master;
   const s = fighterStats(st, p, u);
   const mySide = sideOfOwner(st, u.owner);
   const range = u.kind === 'mage' ? MAGE.range : 1.3;
   // objetivo: el de su amo (rastreador) o el enemigo más cercano a tiro
   let tu: HuntUnit | undefined;
   let tb: HuntBuilding | undefined;
-  if (u.kind === 'beast' && master?.order.k === 'attack') {
+  // orden propia de atacar algo; si no, lo que ataque su amo
+  if (u.order.k === 'attack') {
+    const id = u.order.target;
+    tb = u.kind === 'beast' ? st.buildings.find((b) => b.id === id) : undefined;
+    tu = tb ? undefined : st.units.find((o) => o.id === id && o.alive);
+    if (!tb && !tu) u.order = { k: 'idle' };
+  }
+  if (!tu && !tb && u.kind === 'beast' && master?.order.k === 'attack') {
     const id = master.order.target;
     tb = st.buildings.find((b) => b.id === id);
     tu = tb ? undefined : st.units.find((o) => o.id === id && o.alive);
@@ -1860,40 +2026,71 @@ function stepCompanion(st: HuntState, map: HuntMap, g: Uint8Array, u: HuntUnit, 
     } else if (st.tick >= u.repathAt || u.path.length === 0) {
       routeTo(st, map, g, u, tb ? buildingGoal(tb) : pointGoal(tx, ty));
     }
-  } else if (master && Math.hypot(master.x - u.x, master.y - u.y) > 2.5 && (st.tick >= u.repathAt || u.path.length === 0)) {
-    routeTo(st, map, g, u, pointGoal(master.x, master.y));
+  } else if (home && Math.hypot(home.x - u.x, home.y - u.y) > (u.anchorX >= 0 ? 0.6 : 2.5) && (st.tick >= u.repathAt || u.path.length === 0)) {
+    routeTo(st, map, g, u, pointGoal(home.x, home.y));
   }
-  // demasiado lejos de su amo: vuelve
-  if (master && Math.hypot(master.x - u.x, master.y - u.y) > BEAST.leash * 1.5 && st.tick >= u.repathAt) routeTo(st, map, g, u, pointGoal(master.x, master.y));
+  // demasiado lejos de su casa (amo o punto): vuelve, salvo que persiga una orden tuya
+  if (home && u.order.k !== 'attack' && Math.hypot(home.x - u.x, home.y - u.y) > BEAST.leash * 1.5 && st.tick >= u.repathAt) routeTo(st, map, g, u, pointGoal(home.x, home.y));
   moveUnit(st, map, g, u);
   u.hp = Math.min(u.maxHp, u.hp + s.regen / TICK_RATE);
   if (u.kind === 'beast' && Math.hypot(u.x - (map.camp.x + 0.5), u.y - (map.camp.y + 0.5)) <= HUT_RADIUS + 1) u.hp = Math.min(u.maxHp, u.hp + (u.maxHp * HUT_REGEN) / TICK_RATE);
+}
+
+// búsqueda en anchura desde la casilla del leñador: primer árbol vivo y libre
+// que tenga una casilla transitable al lado
+function reachableTree(st: HuntState, map: HuntMap, g: Uint8Array, x: number, y: number): number {
+  const w = map.w;
+  const start = Math.floor(y) * w + Math.floor(x);
+  const seen = new Uint8Array(w * map.h);
+  const q = new Int32Array(w * map.h);
+  let qh = 0;
+  let qt = 0;
+  q[qt++] = start;
+  seen[start] = 1;
+  while (qh < qt) {
+    const c = q[qh++];
+    const cx = c % w;
+    const cy = (c - cx) / w;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const nx = cx + dx;
+      const ny = cy + dy;
+      if (nx < 0 || ny < 0 || nx >= w || ny >= map.h) continue;
+      const n = ny * w + nx;
+      if (seen[n]) continue;
+      seen[n] = 1;
+      if (isTreeAlive(st, map, n) && !st.treeTaken.has(n)) return n;
+      if (!g[n]) q[qt++] = n;
+    }
+  }
+  return -1;
 }
 
 function stepWorker(st: HuntState, map: HuntMap, g: Uint8Array, u: HuntUnit): void {
   const p = playerOf(st, u.owner);
   if (!p) return;
   if (u.stunUntil > st.tick) return;
+  // movido con el ratón: primero llega; luego vuelve a trabajar desde ahí
+  if (u.order.k === 'move') {
+    if (u.path.length > 0) {
+      moveUnit(st, map, g, u);
+      return;
+    }
+    u.order = { k: 'idle' };
+  }
   if (u.kind === 'lumberjack') {
     if (u.tree >= 0 && st.deadTrees.has(u.tree)) {
       st.treeTaken.delete(u.tree);
       u.tree = -1;
     }
     if (u.tree < 0 || st.treeTaken.get(u.tree) !== u.id) {
-      // busca el árbol libre más cercano al que pueda llegar
-      let best = -1;
-      let bestD = Infinity;
-      for (const t of map.trees) {
-        if (st.treeTaken.has(t) || st.deadTrees.has(t)) continue;
-        const tx = t % map.w;
-        const ty = (t - tx) / map.w;
-        const d = Math.hypot(tx + 0.5 - u.x, ty + 0.5 - u.y);
-        if (d < bestD) {
-          bestD = d;
-          best = t;
-        }
+      // el árbol libre más cercano AL QUE SE PUEDA LLEGAR andando (el más
+      // cercano en línea recta suele estar al otro lado de tu propia muralla)
+      if (st.tick < u.repathAt) return;
+      const best = reachableTree(st, map, g, u.x, u.y);
+      if (best < 0) {
+        u.repathAt = st.tick + T(2); // no hay ninguno: volver a mirar en 2 s
+        return;
       }
-      if (best < 0) return;
       u.tree = best;
       st.treeTaken.set(best, u.id);
       const tx = best % map.w;
@@ -1902,7 +2099,12 @@ function stepWorker(st: HuntState, map: HuntMap, g: Uint8Array, u: HuntUnit): vo
     const tx = u.tree % map.w;
     const ty = (u.tree - tx) / map.w;
     if (distToRect(u.x, u.y, tx, ty, 1, 1) > 0.8) {
-      if (u.path.length === 0 && st.tick >= u.repathAt) routeTo(st, map, g, u, { x: tx, y: ty, w: 1, h: 1, near: true });
+      if (u.path.length === 0 && st.tick >= u.repathAt && !routeTo(st, map, g, u, { x: tx, y: ty, w: 1, h: 1, near: true }) && u.path.length === 0) {
+        // ya no se llega (le han cerrado el paso): soltarlo y buscar otro
+        st.treeTaken.delete(u.tree);
+        u.tree = -1;
+        return;
+      }
       moveUnit(st, map, g, u);
     } else {
       p.wood += ((LUMBERJACKS[u.tier].woodPerSec ?? 0) * RESOURCE_MULT) / TICK_RATE;
@@ -1915,8 +2117,9 @@ function stepWorker(st: HuntState, map: HuntMap, g: Uint8Array, u: HuntUnit): vo
   // reparador: al edificio propio más dañado (murallas primero)
   let target = u.work ? st.buildings.find((b) => b.id === u.work) : undefined;
   if (!target || target.hp >= target.maxHp - 0.01) {
+    const anchored = u.anchorX >= 0;
     target = st.buildings
-      .filter((b) => b.owner === u.owner && b.hp < b.maxHp - 0.01)
+      .filter((b) => b.owner === u.owner && b.hp < b.maxHp - 0.01 && (!anchored || distToRect(u.anchorX, u.anchorY, b.cx, b.cy, b.size, b.size) <= 8))
       .sort((a, b) => (a.type === 'wall' ? 0 : 1) - (b.type === 'wall' ? 0 : 1) || a.hp / a.maxHp - b.hp / b.maxHp)[0];
     u.work = target?.id ?? 0;
     if (target) routeTo(st, map, g, u, buildingGoal(target));
@@ -2092,7 +2295,14 @@ export function stepHunt(st: HuntState, cmds: HuntPlayerCommand[]): HuntEvent[] 
     const range = (def.range ?? 4.7) * (1 + 0.2 * b.retro);
     let target: HuntUnit | undefined;
     let bestD = Infinity;
-    for (const f of foes) {
+    if (b.focus) {
+      const f = foes.find((o) => o.id === b.focus);
+      if (f && detected(st, f) && Math.hypot(b.cx + 0.5 - f.x, b.cy + 0.5 - f.y) <= range) {
+        target = f;
+        bestD = -1;
+      } else if (!st.units.some((o) => o.id === b.focus && o.alive)) b.focus = 0;
+    }
+    for (const f of target ? [] : foes) {
       if (!detected(st, f)) continue;
       const d = Math.hypot(b.cx + 0.5 - f.x, b.cy + 0.5 - f.y);
       if (d <= range && d < bestD) {
@@ -2227,8 +2437,8 @@ export function stepHunt(st: HuntState, cmds: HuntPlayerCommand[]): HuntEvent[] 
   }
 
   // final
-  const hunter = st.units.find((u) => u.kind === 'hunter');
-  if (!hunter || !hunter.alive) st.over = { winner: 'colonist', reason: 'hunter_dead' };
+  // ganan los colonos cuando no queda ningún cazador vivo (los lobos no cuentan)
+  if (!st.units.some((u) => u.kind === 'hunter' && u.alive)) st.over = { winner: 'colonist', reason: 'hunter_dead' };
   else if (!st.players.some((p) => p.form === 'elf' && p.alive)) st.over = { winner: 'hunter', reason: 'all_dead' };
   st.tick += 1;
   return ev;
@@ -2288,7 +2498,7 @@ export interface HuntSnapMe {
 export type HuntSnapUnit = [number, number, number, number, number, number, number, number, number, number];
 // [id, tipo, jugador, x, y, vida, vida máx, flags, nivel/rango, acción]  acción: 0 nada · 1 abajo · 2 izq · 3 der · 4 arriba
 // [id, tipo, jugador, cx, cy, nivel, vida, vida máx, rama, flags, remodelaciones, armadura de la suerte, sorteo en (s)]
-export type HuntSnapBuilding = [number, number, number, number, number, number, number, number, number, number, number, number, number];
+export type HuntSnapBuilding = [number, number, number, number, number, number, number, number, number, number, number, number, number, number];
 
 export interface HuntSnap {
   tick: number;
@@ -2434,7 +2644,7 @@ export function buildHuntSnap(st: HuntState, viewerId: string | null): HuntSnap 
       (b.packedUntil > st.tick ? 16 : 0) |
       (b.forceUntil > st.tick ? 32 : 0) |
       (b.eatUntil > st.tick ? 64 : 0);
-    buildings.push([b.id, ['house', 'wall', 'tower', 'workshop', 'elftree', 'mine', 'sight'].indexOf(b.type), idx.get(b.owner) ?? 0, b.cx, b.cy, b.level, Math.ceil(b.hp), Math.round(b.maxHp), branch, flags, b.retro, b.luckArmor, secsLeft(b.luckReady - st.tick)]);
+    buildings.push([b.id, ['house', 'wall', 'tower', 'workshop', 'elftree', 'mine', 'sight'].indexOf(b.type), idx.get(b.owner) ?? 0, b.cx, b.cy, b.level, Math.ceil(b.hp), Math.round(b.maxHp), branch, flags, b.retro, b.luckArmor, secsLeft(b.luckReady - st.tick), sameSide(b.owner) ? (b.focus ?? 0) : 0]);
   }
   return {
     tick: st.tick,

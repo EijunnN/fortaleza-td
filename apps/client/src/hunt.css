@@ -551,3 +551,64 @@
 .bar.hp.foe i { background: linear-gradient(90deg, #b3261e, #ff6b5e); }
 .hk-panel .hk-row.inv { flex-wrap: wrap; }
 .hk-dock-in .hk-card-wrap { flex-shrink: 0; max-width: calc(100vw - 248px); }
+.hk-focus { display: flex; align-items: center; gap: 8px; font-size: 0.78rem; padding: 6px 8px; border-radius: 10px; background: rgba(255, 90, 78, 0.1); border: 1px solid rgba(255, 90, 78, 0.35); }
+.hk-focus .px { width: 1.6em; height: 1.6em; }
+.hk-focus span { flex: 1; }
+.hk-focus .hk-btn { height: 30px; min-width: 0; }
+/* ---------- chat de la Cacería ---------- */
+.hk-chat {
+  position: absolute;
+  left: 12px;
+  bottom: 224px;
+  width: 340px;
+  max-width: calc(100vw - 24px);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: none;
+}
+.hk-chat-log { display: flex; flex-direction: column; gap: 3px; max-height: 190px; overflow: hidden; }
+.hk-chat.open .hk-chat-log { overflow-y: auto; pointer-events: auto; background: rgba(8, 10, 16, 0.55); border-radius: 10px; padding: 6px; }
+.hk-chat-log .msg {
+  font-size: 0.8rem;
+  line-height: 1.35;
+  padding: 3px 8px;
+  border-radius: 8px;
+  background: rgba(8, 10, 16, 0.62);
+  text-shadow: 0 1px 2px #000;
+  transition: opacity 0.6s ease;
+  word-break: break-word;
+}
+.hk-chat-log .msg b { margin-right: 2px; }
+.hk-chat-log .msg.faded { opacity: 0; }
+.hk-chat.open .hk-chat-log .msg.faded { opacity: 0.85; }
+.hk-chat-log .ch { font-size: 0.66rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; margin-right: 6px; padding: 0 5px; border-radius: 5px; }
+.hk-chat-log .ch.hunter { background: rgba(255, 90, 78, 0.3); color: #ffb4ad; }
+.hk-chat-log .ch.elf { background: rgba(123, 216, 143, 0.25); color: #b7f0c3; }
+.hk-chat-form { display: flex; gap: 6px; pointer-events: auto; }
+.hk-chat-form[hidden] { display: none; }
+.hk-chat-form input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 7px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--hk-border-2);
+  background: rgba(8, 10, 16, 0.85);
+  color: var(--hk-fg);
+  outline: none;
+}
+.hk-chat-form input:focus { border-color: var(--hk-gold); }
+.hk-chat-ch {
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 800;
+  padding: 0 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(123, 216, 143, 0.6);
+  background: rgba(123, 216, 143, 0.15);
+  color: var(--hk-fg);
+  cursor: pointer;
+}
+.hk-chat-ch.all { border-color: rgba(255, 205, 69, 0.6); background: rgba(255, 205, 69, 0.12); }

@@ -55,7 +55,7 @@ const A2E: [number, number][] = [
   [30, 4378],
   [40, 33252],
   [50, 252511],
-  [60, 1_000_000],
+  // el original se para en 1 000 000 por el tope del motor; aquí sigue creciendo
 ];
 const A6E: [number, number][] = [
   [0, 50],
@@ -66,7 +66,6 @@ const A6E: [number, number][] = [
   [25, 7945],
   [30, 21890],
   [40, 166260],
-  [50, 1_000_000],
 ];
 function logLerp(table: [number, number][], min: number): number {
   if (min <= table[0][0]) return table[0][1];
@@ -75,7 +74,10 @@ function logLerp(table: [number, number][], min: number): number {
     const [m0, v0] = table[i - 1];
     if (min <= m1) return Math.round(v0 * Math.pow(v1 / v0, (min - m0) / (m1 - m0)));
   }
-  return table[table.length - 1][1];
+  // más allá del último punto medido: mismo ritmo de crecimiento (sin tope)
+  const [m1, v1] = table[table.length - 1];
+  const [m0, v0] = table[table.length - 2];
+  return Math.round(v1 * Math.pow(v1 / v0, (min - m1) / (m1 - m0)));
 }
 export const goldUnit = (min: number): number => logLerp(A2E, min); // «unidad de oro» del minuto
 export const roleBounty = (min: number): number => logLerp(A6E, min); // matar un ángel o un lobo
@@ -145,7 +147,8 @@ export const WOLF = {
 // recompensa por matar a un colono: 67 % de su oro + 10 por cada madera
 export const ELF_KILL_GOLD_FRAC = 0.67;
 export const ELF_KILL_GOLD_PER_WOOD = 10;
-export const GOLD_CAP = 1_000_000;
+// sin tope de oro ni de madera (en el WC3 original el motor paraba en 1 000 000)
+export const GOLD_CAP = Number.MAX_SAFE_INTEGER;
 
 // ---------- edificios ----------
 export type BuildingType =
@@ -178,7 +181,7 @@ export const BUILDINGS: Record<BuildingType, BuildingInfo> = {
     emoji: '🏡',
     size: 2,
     limit: 1,
-    hotkey: '1',
+    hotkey: '2',
     desc: 'Tu fuente de oro: 1 de oro por segundo, y cada mejora lo DUPLICA y se paga sola en 50 s. Solo una. Para subirla tienes que subir antes tus murallas. Si la destruyen recuperas todo lo invertido.',
   },
   wall: {
@@ -188,7 +191,7 @@ export const BUILDINGS: Record<BuildingType, BuildingInfo> = {
     emoji: '🧱',
     size: 1,
     limit: 40,
-    hotkey: '2',
+    hotkey: '3',
     desc: 'Cierra las puertas de tu parcela. No ataca. Cada nivel le sube vida y armadura; al nivel 6 eliges una especialidad.',
   },
   tower: {
@@ -198,7 +201,7 @@ export const BUILDINGS: Record<BuildingType, BuildingInfo> = {
     emoji: '🏹',
     size: 1,
     limit: 30,
-    hotkey: '3',
+    hotkey: '4',
     desc: 'Cuesta 1 de madera y no dispara hasta que la mejoras. Después cada nivel duplica su daño. Puedes llevarla por la rama de oro: pega menos pero te paga por cada disparo.',
   },
   workshop: {
@@ -208,7 +211,7 @@ export const BUILDINGS: Record<BuildingType, BuildingInfo> = {
     emoji: '🔨',
     size: 2,
     limit: 2,
-    hotkey: '4',
+    hotkey: '5',
     desc: 'Contrata reparadores. Mejorado se convierte en Ayuntamiento I, II, III y Fortaleza: la tecnología que desbloquea torres, casa y murallas altas.',
   },
   elftree: {
@@ -218,7 +221,7 @@ export const BUILDINGS: Record<BuildingType, BuildingInfo> = {
     emoji: '🌳',
     size: 2,
     limit: 2,
-    hotkey: '5',
+    hotkey: '6',
     desc: 'Cría leñadores: cada uno se posa en un árbol y te da madera sin parar. Requiere Ayuntamiento I.',
   },
   mine: {
@@ -228,7 +231,7 @@ export const BUILDINGS: Record<BuildingType, BuildingInfo> = {
     emoji: '⛏️',
     size: 2,
     limit: 99,
-    hotkey: '6',
+    hotkey: '7',
     desc: 'Oro por segundo extra. Desde el nivel 3 se paga en madera (25 de madera por cada 1 de oro/s). Muy frágil. Requiere Ayuntamiento II.',
   },
   sight: {
@@ -238,7 +241,7 @@ export const BUILDINGS: Record<BuildingType, BuildingInfo> = {
     emoji: '🗼',
     size: 1,
     limit: 4,
-    hotkey: '7',
+    hotkey: '8',
     desc: 'Revela al cazador aunque vaya invisible. Requiere Fortaleza.',
   },
 };

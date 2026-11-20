@@ -2909,3 +2909,26 @@ body.q-lite *::after {
   text-align: center;
   color: var(--h-fg);
 }
+/* Cacería · elegir bando en la lista de jugadores */
+.hunt-side-pick { display: inline-flex; gap: 4px; }
+.hunt-side-pick button {
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.05);
+  color: inherit;
+  cursor: pointer;
+}
+.hunt-side-pick button.on[data-hunt-side='hunter'] { background: rgba(255, 90, 78, 0.22); border-color: rgba(255, 90, 78, 0.7); }
+.hunt-side-pick button.on[data-hunt-side='elf'] { background: rgba(123, 216, 143, 0.2); border-color: rgba(123, 216, 143, 0.7); }
+.hunt-side-tag { font-size: 0.72rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; border: 1px solid rgba(255, 255, 255, 0.14); }
+.hunt-side-tag.hunter { background: rgba(255, 90, 78, 0.18); border-color: rgba(255, 90, 78, 0.6); }
+.hunt-side-tag.elf { background: rgba(123, 216, 143, 0.16); border-color: rgba(123, 216, 143, 0.6); }
+.hunt-side-tag.none { opacity: 0.55; }
+/* con los botones de bando, el nombre no se come: la fila puede partirse */
+#lobby-players li:has(.hunt-side-pick) { flex-wrap: wrap; row-gap: 6px; }
+#lobby-players li .player-name { min-width: 5em; }
+#lobby-players li .hunt-side-pick { order: 10; flex-basis: 100%; padding-left: 18px; }

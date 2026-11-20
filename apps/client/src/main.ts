@@ -7,7 +7,7 @@ import { initInput } from './input.js';
 import { initBestiary } from './bestiary.js';
 import { applySpectatorUI, buildTowerBar, hidePanel, initMarket, initScoreboard, initShop, onTick, toast, addChat, refreshPanel, syncSpeedButton, syncTowerBar, toggleSpectatorTowers } from './hud.js';
 import { hideEnd, homeError, initHome, initLobby, renderLobby, showEnd, showLadderResults, switchScreen } from './screens.js';
-import { abandonHunt, isHuntActive, onHuntOver, onHuntTick, startHunt } from './hunt.js';
+import { abandonHunt, huntChat, isHuntActive, onHuntOver, onHuntTick, startHunt } from './hunt.js';
 import { beam, bulletTrail, burst, clearParticles, floatText, fx, line, ring } from './particles.js';
 import { sfx, setMuted, setSfxVolume, setMusicVolume, unlockAudio } from './audio.js';
 import { startMusic, setMusicState, pauseMusic, resumeMusic, stopMusic, type MusicState } from './music.js';
@@ -582,7 +582,11 @@ function wireNet(): void {
     toast('💾 Partida guardada. Se descargó el archivo — cárgalo desde la portada para continuar.', 'info');
   });
 
-  net.on('chat', (msg) => addChat(msg.from, msg.color, msg.text));
+  net.on('chat', (msg) => {
+    // el chat de equipo de la Cacería no va al chat general de la sala
+    if (!msg.team) addChat(msg.from, msg.color, msg.text);
+    if (isHuntActive()) huntChat(msg.from, msg.color, msg.text, msg.team);
+  });
 
   net.on('paused', (msg) => {
     if (store.game) store.game.paused = true;
