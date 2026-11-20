@@ -114,6 +114,8 @@ const disp = new Map<number, { x: number; y: number }>();
 // mueve YA en pantalla con la misma regla de choques que el servidor
 // (steerStep) y se corrige suavemente si el servidor no está de acuerdo.
 const codes = new Set<string>(); // teclas físicas pulsadas (e.code)
+let touchSteer: [number, number] = [0, 0]; // joystick del móvil
+let isTouch = false;
 let steerSent: [number, number] = [0, 0]; // última dirección enviada
 let steerActive: [number, number] = [0, 0]; // la que creemos que aplica el servidor
 const local = { on: false, x: 0, y: 0 };
@@ -356,7 +358,16 @@ function build(): void {
     </div></div>
     <div class="hk-modal" id="hk-modal" hidden></div>
     <div class="hk-tip" id="hk-tip" hidden></div>
-    <div class="hk-end" id="hk-end" hidden></div>`;
+    <div class="hk-end" id="hk-end" hidden></div>
+    <div class="hk-touch" id="hk-touch">
+      <div class="hk-joy" id="hk-joy"><div class="hk-joy-knob" id="hk-joy-knob"></div></div>
+      <div class="hk-tbtns">
+        <button class="hk-tbtn act" data-act="tact" aria-label="Acción: reparar o atacar">⚡<small>Acción</small></button>
+        <button class="hk-tbtn" data-act="tme" aria-label="Volver a tu personaje">👤</button>
+        <button class="hk-tbtn" data-act="tchat" aria-label="Chat">💬</button>
+      </div>
+    </div>
+    <div class="hk-rotate" id="hk-rotate"><div class="ph">📱</div><b>Gira el móvil</b><p>La Cacería se juega en horizontal.</p></div>`;
   canvas = root.querySelector('#hunt-canvas')!;
   g = canvas.getContext('2d')!;
   mini = root.querySelector('#hk-mini')!;
@@ -375,9 +386,26 @@ function build(): void {
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   canvas.addEventListener('pointerdown', (e) => {
     unlockAudio();
+    if (e.pointerType === 'touch') {
+      touchDown(e);
+      return;
+    }
     const w = toWorld(e.clientX, e.clientY);
     onWorldClick(w.x, w.y, e.button === 2);
   });
+  canvas.addEventListener('pointermove', (e) => {
+    if (e.pointerType === 'touch') touchMove(e);
+  });
+  canvas.addEventListener('pointerup', (e) => {
+    if (e.pointerType === 'touch') touchUp(e);
+  });
+  canvas.addEventListener('pointercancel', (e) => {
+    if (e.pointerType === 'touch') {
+      touches.delete(e.pointerId);
+      gesture.cancelled = true;
+    }
+  });
+  setupTouch();
   canvas.addEventListener(
     'wheel',
     (e) => {
@@ -450,6 +478,190 @@ function toWorld(clientX: number, clientY: number): { x: number; y: number } {
   const dpr = window.devicePixelRatio || 1;
   const s = cellPx();
   return { x: cam.x + ((clientX - r.left) * dpr - canvas.width / 2) / s, y: cam.y + ((clientY - r.top) * dpr - canvas.height / 2) / s };
+}
+
+// ---------- móvil ----------
+// Tocar = clic (seleccionar, colocar, apuntar). Mantener pulsado = clic derecho
+// (mandar obreros, fijar objetivo de torre). Arrastrar = mover la cámara.
+// Dos dedos = zoom. El joystick mueve a tu personaje y ⚡ hace lo de la R.
+const touches = new Map<number, { x: number; y: number }>();
+const gesture = { sx: 0, sy: 0, moved: false, cancelled: false, long: false, pinch: 0, zoom0: 1, timer: 0 as unknown as ReturnType<typeof setTimeout> };
+
+function touchDown(e: PointerEvent): void {
+  canvas.setPointerCapture(e.pointerId);
+  touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  clearTimeout(gesture.timer);
+  if (touches.size === 2) {
+    const [a, b] = [...touches.values()];
+    gesture.pinch = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+    gesture.zoom0 = zoom;
+    gesture.cancelled = true;
+    return;
+  }
+  gesture.sx = e.clientX;
+  gesture.sy = e.clientY;
+  gesture.moved = false;
+  gesture.cancelled = false;
+  gesture.long = false;
+  const w = toWorld(e.clientX, e.clientY);
+  mouse.x = w.x;
+  mouse.y = w.y;
+  mouse.in = true;
+  gesture.timer = setTimeout(() => {
+    if (gesture.moved || gesture.cancelled) return;
+    gesture.long = true;
+    navigator.vibrate?.(15);
+    onWorldClick(w.x, w.y, true);
+  }, 480);
+}
+function touchMove(e: PointerEvent): void {
+  const t = touches.get(e.pointerId);
+  if (!t) return;
+  const px = t.x;
+  const py = t.y;
+  t.x = e.clientX;
+  t.y = e.clientY;
+  if (touches.size >= 2) {
+    const [a, b] = [...touches.values()];
+    const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+    zoom = Math.min(1.8, Math.max(0.35, gesture.zoom0 * (d / gesture.pinch)));
+    return;
+  }
+  if (Math.hypot(e.clientX - gesture.sx, e.clientY - gesture.sy) > 12) {
+    gesture.moved = true;
+    clearTimeout(gesture.timer);
+  }
+  const w = toWorld(e.clientX, e.clientY);
+  mouse.x = w.x;
+  mouse.y = w.y;
+  // arrastrar con un dedo mueve la cámara (sin colocar nada)
+  if (gesture.moved && !placing && !targeting) {
+    const k = (window.devicePixelRatio || 1) / cellPx();
+    cam.x -= (e.clientX - px) * k;
+    cam.y -= (e.clientY - py) * k;
+    follow = false;
+  }
+}
+function touchUp(e: PointerEvent): void {
+  touches.delete(e.pointerId);
+  clearTimeout(gesture.timer);
+  if (gesture.cancelled || gesture.long) {
+    if (touches.size === 0) gesture.cancelled = false;
+    return;
+  }
+  // con algo que colocar o apuntar, se suelta donde se quiera (y se puede arrastrar)
+  if (gesture.moved && !placing && !targeting && useSlot < 0) return;
+  const w = toWorld(e.clientX, e.clientY);
+  onWorldClick(w.x, w.y, false);
+}
+
+function setupTouch(): void {
+  isTouch = window.matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
+  root.classList.toggle('touch', isTouch);
+  const joy = root.querySelector<HTMLElement>('#hk-joy')!;
+  const knob = root.querySelector<HTMLElement>('#hk-joy-knob')!;
+  let jid = -1;
+  const setJoy = (e: PointerEvent) => {
+    const r = joy.getBoundingClientRect();
+    const R = r.width / 2;
+    let dx = (e.clientX - (r.left + R)) / R;
+    let dy = (e.clientY - (r.top + R)) / R;
+    const m = Math.hypot(dx, dy);
+    if (m > 1) {
+      dx /= m;
+      dy /= m;
+    }
+    knob.style.transform = `translate(${dx * R * 0.55}px, ${dy * R * 0.55}px)`;
+    if (m < 0.28) {
+      touchSteer = [0, 0];
+      return;
+    }
+    // 8 direcciones
+    const a = Math.atan2(dy, dx);
+    const sector = Math.round(a / (Math.PI / 4));
+    const dirs: [number, number][] = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
+    touchSteer = dirs[(sector + 8) % 8];
+  };
+  joy.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    unlockAudio();
+    goLandscape();
+    jid = e.pointerId;
+    joy.setPointerCapture(e.pointerId);
+    joy.classList.add('on');
+    setJoy(e);
+  });
+  joy.addEventListener('pointermove', (e) => {
+    if (e.pointerId === jid) setJoy(e);
+  });
+  const release = (e: PointerEvent) => {
+    if (e.pointerId !== jid) return;
+    jid = -1;
+    touchSteer = [0, 0];
+    knob.style.transform = '';
+    joy.classList.remove('on');
+  };
+  joy.addEventListener('pointerup', release);
+  joy.addEventListener('pointercancel', release);
+}
+
+// pantalla completa y horizontal (Android lo permite; iOS solo muestra el aviso)
+function goLandscape(): void {
+  if (!isTouch || document.fullscreenElement) return;
+  const el = document.documentElement;
+  void el
+    .requestFullscreen?.()
+    .then(() => (screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> }).lock?.('landscape'))
+    .catch(() => {});
+}
+
+// ⚡: lo mismo que la R, pero sin ratón: lo seleccionado o lo más cercano
+function actTouch(): void {
+  const m = me();
+  const u = myUnit();
+  if (!cur || !m || !u) return;
+  const p = disp.get(u[0]) ?? { x: u[3], y: u[4] };
+  let tx: number | null = null;
+  let ty: number | null = null;
+  const bCenter = (b: HuntSnapBuilding) => [b[3] + bSize(b) / 2, b[4] + bSize(b) / 2] as const;
+  const iu = inspect ? cur.snap.units.find((o) => o[0] === inspect) : undefined;
+  const sb = selected ? cur.snap.buildings.find((o) => o[0] === selected) : undefined;
+  if (m.side === 'hunter' && iu && isEnemyUnit(iu)) [tx, ty] = [iu[3], iu[4]];
+  else if (m.side === 'elf' && sb && sb[6] < sb[7]) [tx, ty] = bCenter(sb);
+  else if (m.side === 'elf') {
+    let best = 4.5;
+    for (const b of cur.snap.buildings) {
+      if (b[6] >= b[7]) continue;
+      const [cx, cy] = bCenter(b);
+      const d = Math.hypot(cx - p.x, cy - p.y);
+      if (d < best) [best, tx, ty] = [d, cx, cy];
+    }
+  } else {
+    let best = 4.5;
+    for (const o of cur.snap.units) {
+      if (!isEnemyUnit(o)) continue;
+      const d = Math.hypot(o[3] - p.x, o[4] - p.y);
+      if (d < best) [best, tx, ty] = [d, o[3], o[4]];
+    }
+    if (tx === null) {
+      best = 3.5;
+      for (const b of cur.snap.buildings) {
+        const [cx, cy] = bCenter(b);
+        const d = Math.hypot(cx - p.x, cy - p.y);
+        if (d < best) [best, tx, ty] = [d, cx, cy];
+      }
+    }
+  }
+  if (tx === null || ty === null) {
+    toast(m.side === 'elf' ? 'No hay nada dañado cerca para reparar' : 'No hay nada cerca que atacar', true);
+    return;
+  }
+  const keep = { x: mouse.x, y: mouse.y, in: mouse.in };
+  mouse.x = tx;
+  mouse.y = ty;
+  mouse.in = true;
+  actOnCursor();
+  Object.assign(mouse, keep);
 }
 
 // ---------- chat ----------
@@ -646,6 +858,7 @@ function orderSent(): void {
 }
 
 function steerFromKeys(): [number, number] {
+  if (touchSteer[0] || touchSteer[1]) return touchSteer;
   const dx = (codes.has('KeyD') ? 1 : 0) - (codes.has('KeyA') ? 1 : 0);
   const dy = (codes.has('KeyS') ? 1 : 0) - (codes.has('KeyW') ? 1 : 0);
   return [dx, dy];
@@ -869,6 +1082,19 @@ function onUiClick(e: Event): void {
       break;
     case 'follow':
       if (inspect) send({ k: 'worker', id: inspect, follow: true });
+      break;
+    case 'tact':
+      actTouch();
+      break;
+    case 'tme':
+      inspect = 0;
+      selected = 0;
+      placing = null;
+      targeting = null;
+      follow = true;
+      break;
+    case 'tchat':
+      openChat();
       break;
     case 'endhunt':
       if (window.confirm('¿Terminar la partida ahora? Todos volverán a la sala.')) net.send({ type: 'end_hunt' });
@@ -1222,7 +1448,7 @@ function syncHud(): void {
   if (m && m.form === 'hunter' && s.releaseIn > 0)
     bh = `<b>${s.releaseIn}</b><span>Estás retenido en tu guarida. Los colonos se esconden. Ve comprando en la tienda (G).</span>`;
   else if (m && m.form === 'elf' && s.releaseIn > 0)
-    bh = `<b>${s.releaseIn}</b><span>¡Corre (WASD)! Elige una parcela, cierra sus puertas con murallas y construye tu casa.</span>`;
+    bh = `<b>${s.releaseIn}</b><span>¡Corre${isTouch ? '' : ' (WASD)'}! Elige una parcela, cierra sus puertas con murallas y construye tu casa.</span>`;
   else if (m && m.channel > 0) bh = `<b class="calm">Volviendo a la guarida… ${m.channel}</b>`;
   else if (m && m.respawn > 0) bh = `<b class="calm">Vuelves en ${m.respawn}</b>`;
   if (bh !== hashes.banner) {

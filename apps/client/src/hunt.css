@@ -629,3 +629,133 @@
   pointer-events: auto;
 }
 .hk-endbtn[hidden] { display: none; }
+
+/* =================== MÓVIL (pantalla táctil) =================== */
+.hk-touch, .hk-rotate { display: none; }
+#screen-hunt.touch .hk-touch { display: block; }
+.hk-joy {
+  position: absolute;
+  left: max(18px, env(safe-area-inset-left));
+  bottom: 18px;
+  width: 132px;
+  height: 132px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.02) 70%);
+  border: 2px solid rgba(255, 255, 255, 0.16);
+  touch-action: none;
+  pointer-events: auto;
+  z-index: 6;
+}
+.hk-joy.on { border-color: rgba(255, 205, 69, 0.55); }
+.hk-joy-knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 58px;
+  height: 58px;
+  margin: -29px 0 0 -29px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0.16));
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  transition: transform 0.06s linear;
+}
+.hk-tbtns {
+  position: absolute;
+  right: max(14px, env(safe-area-inset-right));
+  bottom: 96px;
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: center;
+  gap: 10px;
+  pointer-events: auto;
+  z-index: 6;
+}
+.hk-tbtn {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: 1px solid var(--hk-border-2);
+  background: var(--hk-glass);
+  color: var(--hk-fg);
+  font-size: 1.35rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(10px);
+  touch-action: manipulation;
+}
+.hk-tbtn.act { width: 74px; height: 74px; font-size: 1.7rem; border-color: rgba(255, 205, 69, 0.6); background: rgba(255, 205, 69, 0.16); }
+.hk-tbtn small { font-size: 0.55rem; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase; }
+.hk-tbtn:active { transform: scale(0.94); }
+
+/* HUD compacto: minimapa y chat arriba a la izquierda, consola entre el
+   joystick y los botones, botones algo más grandes al tacto */
+#screen-hunt.touch .hk-mini { top: 56px; bottom: auto; left: max(8px, env(safe-area-inset-left)); width: 112px; height: 112px; padding: 3px; }
+#screen-hunt.touch .hk-chat { left: max(8px, env(safe-area-inset-left)); bottom: auto; top: 176px; width: 250px; }
+#screen-hunt.touch .hk-chat-log { max-height: 110px; }
+#screen-hunt.touch .hk-dock { left: 166px; right: 96px; bottom: 6px; }
+#screen-hunt.touch .hk-card { padding: 6px 8px; gap: 8px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+#screen-hunt.touch .hk-btn { min-width: 46px; height: 52px; }
+#screen-hunt.touch .hk-bars { width: 240px; }
+#screen-hunt.touch .hk-label { font-size: 0.56rem; }
+#screen-hunt.touch .hk-panel { width: 260px; max-height: 58vh; }
+#screen-hunt.touch .hk-shop { width: 340px; max-height: 62vh; }
+#screen-hunt.touch .hk-top { top: max(6px, env(safe-area-inset-top)); left: max(8px, env(safe-area-inset-left)); right: max(8px, env(safe-area-inset-right)); }
+#screen-hunt.touch .hk-tip { display: none !important; }
+#screen-hunt.touch .hk-banner { transform: scale(0.85); transform-origin: top center; }
+
+/* teléfonos apaisados (poca altura): todo un poco más pequeño */
+@media (max-height: 520px) {
+  #screen-hunt.touch .hk-joy { width: 112px; height: 112px; bottom: 12px; }
+  #screen-hunt.touch .hk-joy-knob { width: 50px; height: 50px; margin: -25px 0 0 -25px; }
+  #screen-hunt.touch .hk-tbtns { bottom: 74px; gap: 8px; }
+  #screen-hunt.touch .hk-tbtn { width: 46px; height: 46px; font-size: 1.15rem; }
+  #screen-hunt.touch .hk-tbtn.act { width: 64px; height: 64px; }
+  #screen-hunt.touch .hk-mini { width: 92px; height: 92px; top: 48px; }
+  #screen-hunt.touch .hk-chat { top: 146px; width: 220px; }
+  #screen-hunt.touch .hk-dock { left: 138px; right: 84px; }
+  #screen-hunt.touch .hk-btn { min-width: 42px; height: 46px; font-size: 0.66rem; }
+  #screen-hunt.touch .hk-btn .ic { font-size: 1.4rem; }
+  #screen-hunt.touch .hk-slot { width: 40px; height: 40px; }
+  #screen-hunt.touch .hk-bars { width: 200px; }
+  #screen-hunt.touch .hk-panel, #screen-hunt.touch .hk-shop { max-height: calc(100vh - 110px); }
+  #screen-hunt.touch .hk-card-wrap .hk-stats { display: none; }
+}
+
+/* en vertical no se juega: aviso para girar el móvil */
+@media (orientation: portrait) {
+  #screen-hunt.touch .hk-rotate {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    background: rgba(6, 8, 12, 0.94);
+    color: var(--hk-fg);
+    text-align: center;
+    padding: 24px;
+  }
+  #screen-hunt.touch .hk-rotate .ph { font-size: 3.6rem; animation: hk-rot 1.8s ease-in-out infinite; }
+  #screen-hunt.touch .hk-rotate b { font-size: 1.3rem; }
+  #screen-hunt.touch .hk-rotate p { margin: 0; color: var(--hk-muted); }
+}
+@keyframes hk-rot {
+  0%, 30% { transform: rotate(0deg); }
+  60%, 100% { transform: rotate(-90deg); }
+}
+#screen-hunt.touch .hk-res { flex-wrap: nowrap; gap: 4px; }
+#screen-hunt.touch .hk-chip { font-size: 0.78rem; padding: 3px 8px; gap: 4px; }
+#screen-hunt.touch .hk-chip .px { width: 1.1em; height: 1.1em; }
+#screen-hunt.touch .hk-clock > * { font-size: 0.78rem; padding: 3px 8px; }
+#screen-hunt.touch .hk-market { flex-direction: row; }
+#screen-hunt.touch .hk-market .hk-btn { height: 52px; }
+#screen-hunt.touch .hk-team { font-size: 0.72rem; }
+@media (max-height: 520px) {
+  #screen-hunt.touch .hk-mini { top: 44px; }
+  #screen-hunt.touch .hk-market .hk-btn { height: 46px; }
+}
